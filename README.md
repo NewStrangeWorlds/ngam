@@ -1,2 +1,4 @@
-# ngam
-Next Generation Atmosphere Model
+# Next Generation Atmosphere Model
+
+Under development :)
+
