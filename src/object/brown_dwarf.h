@@ -23,6 +23,9 @@
 
 
 #include <iostream>
+#include <fstream>
+#include <vector>
+#include <iomanip>
 
 #include "generic_object.h"
 
@@ -35,8 +38,46 @@ class BrownDwarf : public GenericObject {
       GlobalConfig* config,
       SpectralGrid* spectral_grid) 
       : GenericObject(config, spectral_grid)
-    {std::cout << spectral_grid->nbSpectralPoints() << " points in brown dwarf spectral grid.\n";}
+    {}
     virtual ~BrownDwarf() {}
+
+    bool computeAtmosphericStructure() override
+    {
+      std::cout << "Computing brown dwarf atmospheric structure...\n";
+
+      
+      std::vector<double> chem_parameters{0.5, 0.5};
+      std::vector<double> temp_parameters{1e-4, 3000.0};
+      
+      atmosphere.calcAtmosphereStructure(
+        config->surface_gravity,
+        config->bottom_radius,
+        config->use_variable_gravity,
+        temperature_profile,
+        temp_parameters,
+        chemistry,
+        chem_parameters);
+      
+      opacity.calculate();
+
+      radiative_transfer->calcSpectrum(
+        atmosphere,
+        opacity,
+        radiation_field);
+      
+
+
+      std::string file_name = "spectrum.dat";
+  
+      std::fstream file(file_name.c_str(), std::ios::out);
+
+      for (size_t i=0; i<spectral_grid->nb_spectral_points; ++i)
+        file << std::setprecision(10) << std::scientific << spectral_grid->wavelength_list[i] << " " << radiation_field.spectrum[i] << "\n";
+
+      file.close();
+      
+      return true;
+    }
 };
 
 } // namespace bear

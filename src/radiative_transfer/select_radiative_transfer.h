@@ -94,8 +94,7 @@ inline RadiativeTransfer* selectRadiativeTransfer(
         DiscreteOrdinates* disort = new DiscreteOrdinates(
           spectral_grid, 
           std::stoi(parameters[0]), 
-          nb_grid_points, 
-          config->use_gpu); 
+          nb_grid_points); 
         radiative_transfer = disort;
       }
       break;

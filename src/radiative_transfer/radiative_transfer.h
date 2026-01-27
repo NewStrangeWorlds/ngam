@@ -23,11 +23,43 @@
 
 #include <vector>
 
-#include "../forward_model/atmosphere/atmosphere.h"
+#include "../atmosphere/atmosphere.h"
+#include "../transport_coeff/opacity_calc.h"
 #include "../spectral_grid/spectral_grid.h"
 
 
 namespace bear {
+
+
+struct RadiativeTransferOutput {
+  RadiativeTransferOutput(size_t nb_spectral_points, size_t nb_grid_points) 
+  {
+    spectrum.assign(nb_spectral_points, 0.0);
+
+    flux_total.assign(nb_grid_points, 0.0);
+    flux_up_total.assign(nb_grid_points, 0.0);
+    flux_down_total.assign(nb_grid_points, 0.0);
+    mean_intensity_total.assign(nb_grid_points, 0.0);
+
+    flux.assign(nb_spectral_points, std::vector<double>(nb_grid_points, 0.0));
+    flux_up.assign(nb_spectral_points, std::vector<double>(nb_grid_points, 0.0));
+    flux_down.assign(nb_spectral_points, std::vector<double>(nb_grid_points, 0.0));
+    mean_intensity.assign(nb_spectral_points, std::vector<double>(nb_grid_points, 0.0));
+  }
+  
+  std::vector<double> spectrum;
+
+  std::vector<double> flux_total;
+  std::vector<double> flux_up_total;
+  std::vector<double> flux_down_total;
+  std::vector<double> mean_intensity_total;
+  
+  std::vector< std::vector<double> > flux;
+  std::vector< std::vector<double> > flux_up;
+  std::vector< std::vector<double> > flux_down;
+  std::vector< std::vector<double> > mean_intensity;
+};
+
 
 
 class RadiativeTransfer{
@@ -37,28 +69,13 @@ class RadiativeTransfer{
     virtual ~RadiativeTransfer() {}
     virtual void calcSpectrum(
       const Atmosphere& atmosphere,
-      const std::vector< std::vector<double> >& absorption_coeff, 
-      const std::vector< std::vector<double> >& scattering_coeff,
-      const std::vector< std::vector<double> >& cloud_optical_depth,
-      const std::vector< std::vector<double> >& cloud_single_scattering,
-      const std::vector< std::vector<double> >& cloud_asym_param,
-      const double spectrum_scaling,
-      std::vector<double>& spectrum) = 0;
-    virtual void calcSpectrumGPU(
-      const Atmosphere& atmosphere,
-      double* absorption_coeff_dev,
-      double* scattering_coeff_dev,
-      double* cloud_optical_depth,
-      double* cloud_single_scattering,
-      double* cloud_asym_param,
-      const double spectrum_scaling,
-      double* model_spectrum_dev) = 0;
+      const OpacityCalculation& opacity,
+      RadiativeTransferOutput& output) = 0;
     
     //change units of high-res spectrum from cm to micron^-1
     void changeSpectrumUnits(std::vector<double>& spectrum) {
       for (size_t i=0; i<spectrum.size(); ++i)
         spectrum[i] = spectrum[i]/spectral_grid->wavelength_list[i]/spectral_grid->wavelength_list[i]*10000.0;};
-    void changeSpectrumUnitsGPU(double* spectrum);
   
   protected:
     SpectralGrid* spectral_grid = nullptr;

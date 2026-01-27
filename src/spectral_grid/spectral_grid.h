@@ -54,6 +54,9 @@ class SpectralGrid{
     double wavenumberToWavelength(const double wavenumber)
      {return 1.0/wavenumber * 1e4;}
 
+    size_t nb_spectral_points_full;           //number of points in the global wavenumber list
+    size_t nb_spectral_points;                //number of points in the spectral grid
+
     size_t nbSpectralPointsFull() {
       return nb_spectral_points_full;}
     size_t nbSpectralPoints() {
@@ -92,9 +95,6 @@ class SpectralGrid{
 
     std::vector<size_t> index_list;
     std::vector<std::vector<double>> observation_wavelength_edges;
-
-    size_t nb_spectral_points_full;           //number of points in the global wavenumber list
-    size_t nb_spectral_points;                //number of points in the spectral grid
 
     void loadWavenumberList();
     void createHeliosWavenumberList();

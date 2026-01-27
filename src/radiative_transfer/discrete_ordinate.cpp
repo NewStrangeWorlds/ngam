@@ -27,7 +27,7 @@
 
 #include "discrete_ordinate.h"
 
-#include "../forward_model/atmosphere/atmosphere.h"
+#include "../atmosphere/atmosphere.h"
 #include "../additional/aux_functions.h"
 #include "../additional/physical_const.h"
 #include "../additional/quadrature.h"
@@ -66,16 +66,9 @@ namespace bear{
 DiscreteOrdinates::DiscreteOrdinates(
   SpectralGrid* spectral_grid_ptr,
   const size_t nb_streams,
-  const size_t nb_grid_points,
-  const bool use_gpu)
+  const size_t nb_grid_points)
    : RadiativeTransfer(spectral_grid_ptr)
 { 
-  if (use_gpu)
-  {
-    std::string error_message = "Radiative transfer model CDISORT cannot run on the GPU\n";
-    throw InvalidInput(std::string ("DiscreteOrdinates::DiscreteOrdinates"), error_message);
-  }
-
   initDISORT(nb_streams, nb_grid_points-1);
 }
 
@@ -83,13 +76,8 @@ DiscreteOrdinates::DiscreteOrdinates(
 
 void DiscreteOrdinates::calcSpectrum(
   const Atmosphere& atmosphere,
-  const std::vector< std::vector<double> >& absorption_coeff, 
-  const std::vector< std::vector<double> >& scattering_coeff,
-  const std::vector< std::vector<double> >& cloud_optical_depth,
-  const std::vector< std::vector<double> >& cloud_single_scattering,
-  const std::vector< std::vector<double> >& cloud_asym_param,
-  const double spectrum_scaling,
-  std::vector<double>& spectrum)
+  const OpacityCalculation& opacity,
+  RadiativeTransferOutput& output)
 { 
   for (size_t i=0; i<ds.size(); ++i)
   {
@@ -98,8 +86,8 @@ void DiscreteOrdinates::calcSpectrum(
 
 
   #pragma omp parallel for
-  for (size_t i=0; i<spectrum.size(); ++i)
-    spectrum[i] = calcSpectrum(absorption_coeff[i], scattering_coeff[i], cloud_optical_depth[i], atmosphere.altitude, i) * spectrum_scaling;
+  for (size_t i=0; i<output.spectrum.size(); ++i)
+    output.spectrum[i] = calcSpectrum(opacity.absorption_coeff[i], opacity.scattering_coeff[i], opacity.cloud_optical_depths[i], atmosphere.altitude, i);
 }
 
 

@@ -355,7 +355,7 @@ std::vector<double> SpectralGrid::wavelengthList(const std::vector<size_t>& indi
 
 SpectralGrid::~SpectralGrid()
 { 
-  std::cout << "test\n";
+
 }
 
 

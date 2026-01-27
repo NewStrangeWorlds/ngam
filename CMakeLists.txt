@@ -43,6 +43,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR})
 #define the source files 
 set(SRC
   src/main.cpp
+  src/additional/aux_functions.cpp
   src/config/global_config.cpp
   src/spectral_grid/convert.cpp
   src/spectral_grid/spectral_grid.cpp
@@ -54,7 +55,12 @@ set(SRC
   src/transport_coeff/transport_coeff.cpp
   src/transport_coeff/h_m.cpp
   src/radiative_transfer/cdisort_src/cdisort.c
-  src/radiative_transfer/cdisort_src/locate.c)
+  src/radiative_transfer/cdisort_src/locate.c
+  src/radiative_transfer/discrete_ordinate.cpp
+  src/radiative_transfer/short_characteristics.cpp
+  src/atmosphere/atmosphere.cpp
+  src/chemistry/isoprofile_chemistry.cpp
+  src/temperature/milne_solution_temperature.cpp)
 
 
 # set(SRC_PYTHON_WRAPPER

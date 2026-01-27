@@ -24,6 +24,14 @@
 #include "../config/global_config.h"
 #include "../spectral_grid/spectral_grid.h"
 #include "../transport_coeff/transport_coeff.h"
+#include "../transport_coeff/opacity_calc.h"
+#include "../atmosphere/atmosphere.h"
+#include "../chemistry/select_chemistry.h"
+#include "../chemistry/chemistry.h"
+#include "../temperature/select_temperature_profile.h"
+#include "../temperature/temperature.h"
+#include "../radiative_transfer/select_radiative_transfer.h"
+#include "../radiative_transfer/radiative_transfer.h"
 
 
 namespace bear{
@@ -34,20 +42,60 @@ class GenericObject {
     GenericObject(
       GlobalConfig* config_,
       SpectralGrid* spectral_grid_) 
-      : config(config_), 
+      : radiation_field(spectral_grid_->nbSpectralPoints(), config_->nb_grid_points),
+        config(config_), 
         spectral_grid(spectral_grid_),
-        transport_coeff(
-          config, 
-          spectral_grid, 
+        atmosphere(config->nb_grid_points, config->atmos_boundary_pressures),
+        opacity(
+          config,
+          spectral_grid,
+          &atmosphere,
           config->opacity_species_symbol,
-          config->opacity_species_folder)
-    {}
+          config->opacity_species_folder,
+          config->cloud_model.size() > 0)
+    {
+      temperature.assign(config->nb_grid_points, 100.0);
+      pressure.assign(config->nb_grid_points, 1.0);
+
+      chemistry.assign(config->chemistry_model.size(), nullptr);
+
+      for (size_t i=0; i<config->chemistry_model.size(); ++i)
+        chemistry[i] = selectChemistryModule(
+          config->chemistry_model[i], 
+          config->chemistry_parameters[i], 
+          config);
+
+      temperature_profile = selectTemperatureProfile(
+        config->temperature_profile_type, 
+        config->temperature_profile_parameters);
+
+      radiative_transfer = selectRadiativeTransfer(
+        config->radiative_transfer_type,
+        config->radiative_transfer_parameters,
+        config->nb_grid_points,
+        config,
+        spectral_grid);
+    }
     virtual ~GenericObject() {}
-  private:
+
+    virtual bool computeAtmosphericStructure() = 0;
+
+    std::vector<double> temperature;
+    std::vector<double> pressure;
+
+    RadiativeTransferOutput radiation_field;
+  protected:
     GlobalConfig* config;
     SpectralGrid* spectral_grid;
-    
-    TransportCoefficients transport_coeff;
+
+    Atmosphere atmosphere;
+    OpacityCalculation opacity;
+    RadiativeTransfer* radiative_transfer = nullptr;
+
+    std::vector<Chemistry*> chemistry;
+    Temperature* temperature_profile = nullptr;
+
+    void computeOpacity();
 };
 
 

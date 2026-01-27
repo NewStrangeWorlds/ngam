@@ -26,7 +26,7 @@
 
 #include "short_characteristics.h"
 
-#include "../forward_model/atmosphere/atmosphere.h"
+#include "../atmosphere/atmosphere.h"
 #include "../spectral_grid/spectral_grid.h"
 #include "../additional/aux_functions.h"
 #include "../additional/physical_const.h"
@@ -38,21 +38,18 @@ namespace bear{
 
 void ShortCharacteristics::calcSpectrum(
   const Atmosphere& atmosphere,
-  const std::vector< std::vector<double> >& absorption_coeff,
-  const std::vector< std::vector<double> >& scattering_coeff,
-  const std::vector< std::vector<double> >& cloud_optical_depth,
-  const std::vector< std::vector<double> >& cloud_single_scattering,
-  const std::vector< std::vector<double> >& cloud_asym_param,
-  const double spectrum_scaling,
-  std::vector<double>& spectrum)
+  const OpacityCalculation& opacity,
+  RadiativeTransferOutput& output)
 {
 
   #pragma omp parallel for schedule(dynamic, 1)
-  for (size_t i=0; i<spectrum.size(); ++i)
-    spectrum[i] = calcSpectrum(absorption_coeff[i], cloud_optical_depth[i], atmosphere.temperature, atmosphere.altitude, i);
-
-
-  for (auto & i : spectrum) i *= spectrum_scaling;
+  for (size_t i=0; i<output.spectrum.size(); ++i)
+    output.spectrum[i] = calcSpectrum(
+      opacity.absorption_coeff[i], 
+      opacity.cloud_optical_depths[i], 
+      atmosphere.temperature, 
+      atmosphere.altitude, 
+      i);
 }
 
 

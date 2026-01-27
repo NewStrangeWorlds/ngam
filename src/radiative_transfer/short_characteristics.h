@@ -28,7 +28,7 @@
 
 #include "radiative_transfer.h"
 
-#include "../forward_model/atmosphere/atmosphere.h"
+#include "../atmosphere/atmosphere.h"
 #include "../spectral_grid/spectral_grid.h"
 
 
@@ -43,23 +43,9 @@ class ShortCharacteristics : public RadiativeTransfer{
     
     virtual void calcSpectrum(
       const Atmosphere& atmosphere,
-      const std::vector< std::vector<double> >& absorption_coeff, 
-      const std::vector< std::vector<double> >& scattering_coeff,
-      const std::vector< std::vector<double> >& cloud_optical_depth,
-      const std::vector< std::vector<double> >& cloud_single_scattering,
-      const std::vector< std::vector<double> >& cloud_asym_param,
-      const double spectrum_scaling,
-      std::vector<double>& spectrum);
-
-    virtual void calcSpectrumGPU(
-      const Atmosphere& atmosphere,
-      double* absorption_coeff_dev,
-      double* scattering_coeff_dev,
-      double* cloud_optical_depth,
-      double* cloud_single_scattering,
-      double* cloud_asym_param,
-      const double spectrum_scaling,
-      double* model_spectrum_dev);
+      const OpacityCalculation& opacity,
+      RadiativeTransferOutput& output);
+  
   private:
     const std::vector<double> gauss_nodes{0.211324865405187, 0.788675134594813};
     const std::vector<double> gauss_weights{0.5, 0.5};

@@ -9,7 +9,7 @@
 
 int main(int argc, char *argv[])
 {
-  bear::GlobalConfig config("browndwarf", "/media/data/opacity_data/helios-k/", "const_resolution", 10.0);
+  bear::GlobalConfig config("browndwarf", "/media/data/opacity_data/helios-k/", "const_resolution", 1000.0);
 
   bear::SpectralGrid spectral_grid(&config, 0.3, 100);
   
@@ -17,7 +17,7 @@ int main(int argc, char *argv[])
 
   std::cout << "Hello, World!" << std::endl;
 
-  std::cout << spectral_grid.nbSpectralPoints() << " spectral points in total.\n";
+  brown_dwarf.computeAtmosphericStructure();
   
   return 0;
 }

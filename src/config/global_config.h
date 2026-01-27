@@ -23,6 +23,7 @@
 
 #include <string>
 #include <vector>
+#include <string>
 
 
 namespace bear {
@@ -47,12 +48,31 @@ struct GlobalConfig {
   std::string retrieval_folder_path = "";
   
   unsigned int spectral_disecretisation = 0;
-  double spectral_resolution = 0;
+  double spectral_resolution = 1000;
 
   unsigned int nb_mpi_processes = 1;
   unsigned int nb_omp_processes = 0;
   
   unsigned int nb_disort_streams = 4;
+
+  unsigned int nb_grid_points = 100;
+
+  double surface_gravity = 100.0; //in cm/s2
+  double bottom_radius = 7.1492e9; //in cm
+  bool use_variable_gravity = false;
+
+  std::vector<double> atmos_boundary_pressures{1e2, 1e-6}; //in bar
+
+  std::vector<std::string> chemistry_model{"iso"};
+  std::vector< std::vector<std::string> > chemistry_parameters{{"H2O", "CO2"}};
+
+  std::string temperature_profile_type = "milne";
+  std::vector<std::string> temperature_profile_parameters{};
+
+  std::vector<std::string> cloud_model{};
+
+  std::string radiative_transfer_type = "disort";
+  std::vector<std::string> radiative_transfer_parameters{"4"};
 
   std::vector<std::string> opacity_species_symbol{"H2O", "CO2"};
   std::vector<std::string> opacity_species_folder{"Molecules/1H2-16O__POKAZATEL_e2b", "Molecules/12C-16O2__CDSD_4000_e2b"};
