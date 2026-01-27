@@ -63,8 +63,11 @@ struct GlobalConfig {
 
   std::vector<double> atmos_boundary_pressures{1e2, 1e-6}; //in bar
 
-  std::vector<std::string> chemistry_model{"iso"};
-  std::vector< std::vector<std::string> > chemistry_parameters{{"H2O", "CO2"}};
+  // std::vector<std::string> chemistry_model{"iso"};
+  // std::vector< std::vector<std::string> > chemistry_parameters{{"H2O", "CO2"}};
+
+  std::vector<std::string> chemistry_model{"eq"};
+  std::vector< std::vector<std::string> > chemistry_parameters{{"fastchem_parameters.dat"}};
 
   std::string temperature_profile_type = "milne";
   std::vector<std::string> temperature_profile_parameters{};
@@ -74,8 +77,18 @@ struct GlobalConfig {
   std::string radiative_transfer_type = "disort";
   std::vector<std::string> radiative_transfer_parameters{"4"};
 
-  std::vector<std::string> opacity_species_symbol{"H2O", "CO2"};
-  std::vector<std::string> opacity_species_folder{"Molecules/1H2-16O__POKAZATEL_e2b", "Molecules/12C-16O2__CDSD_4000_e2b"};
+  std::vector<std::string> opacity_species_symbol{"CIA-H2-H2", "CIA-H2-He", "H2O", "K", "Na", "CH4", "NH3", "H2S", "CO", "CO2"};
+  std::vector<std::string> opacity_species_folder{
+    "CIA/H2-H2",
+    "CIA/H2-He",
+    "Alkali_Allard/K",
+    "Alkali_Allard/Na",
+    "Molecules/1H2-16O__POKAZATEL_e2b", 
+    "Molecules/12C-1H4__YT34to10_e2b",
+    "Molecules/14N-1H3__CoYuTe_e2b",
+    "Molecules/1H2-32S__AYT2_e2b",
+    "Molecules/12C-16O__Li2015_e2b",
+    "Molecules/12C-16O2__CDSD_4000_e2b"};
 };
 
 

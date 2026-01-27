@@ -60,6 +60,7 @@ set(SRC
   src/radiative_transfer/short_characteristics.cpp
   src/atmosphere/atmosphere.cpp
   src/chemistry/isoprofile_chemistry.cpp
+  src/chemistry/fastchem_chemistry.cpp
   src/temperature/milne_solution_temperature.cpp)
 
 
@@ -72,7 +73,25 @@ find_package(OpenMP REQUIRED C CXX)
 
 
 
-# include(FetchContent)
+include(FetchContent)
+
+
+#download FastChem 3, if necessary
+FetchContent_Declare(
+  fastchem
+  GIT_REPOSITORY https://github.com/newstrangeworlds/fastchem
+  GIT_TAG        cf931e730aaa88315e913562b4f468cc0fd39712
+)
+
+FetchContent_GetProperties(fastchem)
+set(FASTCHEM_ONLY_LIBRARY ON)
+
+if (NOT fastchem_POPULATED)
+  FetchContent_Populate(fastchem)
+  add_subdirectory(${fastchem_SOURCE_DIR} ${fastchem_BINARY_DIR})
+endif()
+
+
 #
 # #download the Boost Math library if necessary
 # FetchContent_Declare(
@@ -152,4 +171,4 @@ add_executable(ngam ${SRC})
 
 #link files for the final BeAR code
 #target_link_libraries(bear PUBLIC fastchem_lib bear_cuda multinest_shared OpenMP::OpenMP_CXX ${LAPACK_LIBRARIES})
-target_link_libraries(ngam PUBLIC OpenMP::OpenMP_CXX)
+target_link_libraries(ngam PUBLIC fastchem_lib OpenMP::OpenMP_CXX)

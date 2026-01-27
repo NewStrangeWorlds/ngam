@@ -24,7 +24,7 @@
 
 #include "chemistry.h"
 
-
+#include "fastchem_chemistry.h"
 #include "isoprofile_chemistry.h"
 
 #include "../config/global_config.h"
@@ -83,18 +83,17 @@ inline Chemistry* selectChemistryModule(
       it_short));
 
 
-  // if (module_id == chemistry_modules::eq)
-  // {
-  //   if (parameters.size() != 1) {
-  //       std::string error_message = "Equilibrium chemistry requires exactly one parameter!\n";
-  //       throw InvalidInput(std::string ("forward_model.config"), error_message);}
+  if (module_id == chemistry_modules::eq)
+  {
+    if (parameters.size() != 1) {
+        std::string error_message = "Equilibrium chemistry requires exactly one parameter!\n";
+        throw InvalidInput(std::string ("forward_model.config"), error_message);}
     
-  //   FastChemChemistry* model = new FastChemChemistry(
-  //       config->retrieval_folder_path + parameters[0], 
-  //       config->nb_omp_processes);
+    FastChemChemistry* model = new FastChemChemistry(
+        parameters[0]);
 
-  //   return model;
-  // }
+    return model;
+  }
 
   if (module_id == chemistry_modules::iso)
   {
