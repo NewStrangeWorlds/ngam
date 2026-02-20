@@ -31,7 +31,6 @@
 
 #include "opacity_species.h"
 
-#include "../config/global_config.h"
 #include "../additional/physical_const.h"
 #include "../spectral_grid/spectral_grid.h"
 
@@ -41,7 +40,7 @@ namespace ngam{
 
 void OpacitySpecies::init()
 {
-  std::string file_path = config->cross_section_file_path;
+  std::string file_path = cross_section_file_path;
   
   //if we use the built-in Rayleigh scattering
   //or continuum absorption, we don't need to read any data

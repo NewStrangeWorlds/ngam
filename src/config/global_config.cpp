@@ -22,14 +22,7 @@
 
 #include "../additional/exceptions.h"
 
-#include <exception>
-#include <iostream>
-#include <fstream>
-#include <iomanip>
 #include <string>
-#include <sstream>
-#include <omp.h>
-#include <stdlib.h>
 
 namespace ngam {
 
@@ -37,77 +30,34 @@ namespace ngam {
 GlobalConfig::GlobalConfig(
   const std::string forward_model_type_,
   const std::string cross_section_file_path_,
-  const std::string spectral_disecretisation_,
+  const std::string spectral_discretisation_,
   const double resolution_)
   : forward_model_type(forward_model_type_),
     cross_section_file_path(cross_section_file_path_)
 {
-  if (spectral_disecretisation_ != "const_wavenumber" 
-   && spectral_disecretisation_ != "const_wavelength" 
-   && spectral_disecretisation_ != "const_resolution")
+  if (spectral_discretisation_ != "const_wavenumber"
+   && spectral_discretisation_ != "const_wavelength"
+   && spectral_discretisation_ != "const_resolution")
   {
-    std::string error_message = "Spectral discretisation parameter: " 
-      + spectral_disecretisation_ + " in retrieval.config unknown!\n";
+    std::string error_message = "Spectral discretisation parameter: "
+      + spectral_discretisation_ + " unknown!\n";
     throw InvalidInput(std::string ("GlobalConfig::GlobalConfig"), error_message);
   }
 
-  if (spectral_disecretisation_ == "const_wavenumber")
+  if (spectral_discretisation_ == "const_wavenumber")
   {
-    spectral_disecretisation = 0;
+    spectral_discretisation = 0;
   }
-  else if (spectral_disecretisation_ == "const_wavelength")
+  else if (spectral_discretisation_ == "const_wavelength")
   {
-    spectral_disecretisation = 1;
+    spectral_discretisation = 1;
   }
-  else if (spectral_disecretisation_ == "const_resolution")
+  else if (spectral_discretisation_ == "const_resolution")
   {
-    spectral_disecretisation = 2;
+    spectral_discretisation = 2;
   }
 
   spectral_resolution = resolution_;
-}
-
-
-
-bool GlobalConfig::loadConfigFile(std::string retrieval_folder)
-{
-  if (retrieval_folder.back() != '/')
-    retrieval_folder.append("/");
-
-  retrieval_folder_path = retrieval_folder;
-
-  
-  std::string file_path = retrieval_folder;
-  file_path.append("retrieval.config");
-
-  
-  std::fstream file;
-  file.open(file_path.c_str(), std::ios::in);
-
-  if (file.fail()) 
-  {
-    std::cout << "Couldn't open retrieval options file " << file_path << "\n";
-    
-    return false;
-  }
-
-  
-  std::cout << "\nParameters found in retrieval.config:\n";
-
-  std::string line;
-  std::string input;
-
-  //Header General Config
-  std::getline(file, line);
-  std::getline(file, line);
-  std::getline(file, line);
-  std::cout << "General Program Parameters\n";
-
-  std::getline(file, line);
-
-  file.close();
-
-  return true;
 }
 
 

@@ -24,6 +24,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <memory>
 
 #include "temperature.h"
 
@@ -39,13 +40,13 @@ namespace ngam {
 //definition of the different chemistry modules with an
 //identifier, a keyword to be located in the config file and a short version of the keyword
 namespace temp_profile_modules{
-  enum id {milne, constant}; 
+  enum id {milne, constant};
   const std::vector<std::string> description {"milne", "const"};
 }
 
 
 
-inline Temperature* selectTemperatureProfile(
+inline std::unique_ptr<Temperature> selectTemperatureProfile(
   const std::string profile_type,
   const std::vector<std::string>& parameters)
 {
@@ -69,28 +70,16 @@ inline Temperature* selectTemperatureProfile(
     std::distance(temp_profile_modules::description.begin(), it));
 
 
-  //create the temperature profile object based on the chosen module
-  Temperature* temperature_profile = nullptr;
-
   switch (module_id)
   {
     case temp_profile_modules::milne :
-      {
-        MilneTemperature* temp = new MilneTemperature();
-        temperature_profile = temp;
-      }
-      break;
+      return std::make_unique<MilneTemperature>();
 
     case temp_profile_modules::constant :
-      {
-        ConstantTemperature* temp = new ConstantTemperature();
-        temperature_profile = temp;  
-      }
-      break;
+      return std::make_unique<ConstantTemperature>();
   }
 
-
-  return temperature_profile;
+  return nullptr;
 }
 
 

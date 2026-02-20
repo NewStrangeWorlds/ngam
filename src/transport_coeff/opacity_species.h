@@ -28,7 +28,6 @@
 
 #include "../chemistry/chem_species.h"
 #include "../spectral_grid/spectral_grid.h"
-#include "../config/global_config.h"
 #include "sampled_data.h"
 
 
@@ -62,7 +61,7 @@ class OpacitySpecies {
     const std::string species_name = "";
     const std::string species_folder = "";
   protected:
-    GlobalConfig* config;
+    std::string cross_section_file_path;
     SpectralGrid* spectral_grid;
 
     double species_mass = 0;

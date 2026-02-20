@@ -24,12 +24,12 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <memory>
 
 #include "radiative_transfer.h"
 
 #include "short_characteristics.h"
 #include "discrete_ordinate.h"
-#include "../config/global_config.h"
 #include "../additional/exceptions.h"
 
 
@@ -38,17 +38,16 @@ namespace ngam {
 //definition of the different chemistry modules with an
 //identifier, a keyword to be located in the config file and a short version of the keyword
 namespace rt_modules{
-  enum id {scm, disort}; 
+  enum id {scm, disort};
   const std::vector<std::string> description {"scm", "disort"};
 }
 
 
 
-inline RadiativeTransfer* selectRadiativeTransfer(
+inline std::unique_ptr<RadiativeTransfer> selectRadiativeTransfer(
   const std::string rt_type,
   const std::vector<std::string>& parameters,
-  const size_t nb_grid_points, 
-  GlobalConfig* config,
+  const size_t nb_grid_points,
   SpectralGrid* spectral_grid)
 {
   //find the corresponding radiative transfer module to the supplied "type" string
@@ -72,17 +71,10 @@ inline RadiativeTransfer* selectRadiativeTransfer(
     it));
 
 
-  //create the radiative transfer object based on the chosen module
-  RadiativeTransfer* radiative_transfer = nullptr;
-
   switch (module_id)
   {
     case rt_modules::scm :
-      {
-        ShortCharacteristics* scm = new ShortCharacteristics(spectral_grid);
-        radiative_transfer = scm; 
-      }
-      break;
+      return std::make_unique<ShortCharacteristics>(spectral_grid);
 
     case rt_modules::disort :
       if (parameters.size() != 1)
@@ -90,18 +82,13 @@ inline RadiativeTransfer* selectRadiativeTransfer(
         std::string error_message = "Discrete ordinate radiative transfer requires exactly one parameter (number of streams)!\n";
         throw InvalidInput(std::string ("forward_model.config"), error_message);
       }
-      {
-        DiscreteOrdinates* disort = new DiscreteOrdinates(
-          spectral_grid, 
-          std::stoi(parameters[0]), 
-          nb_grid_points); 
-        radiative_transfer = disort;
-      }
-      break;
+      return std::make_unique<DiscreteOrdinates>(
+        spectral_grid,
+        std::stoi(parameters[0]),
+        nb_grid_points);
   }
 
-
-  return radiative_transfer;
+  return nullptr;
 }
 
 

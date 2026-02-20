@@ -27,11 +27,11 @@
 #include "fastchem_chemistry.h"
 #include "isoprofile_chemistry.h"
 
-#include "../config/global_config.h"
 #include "../additional/exceptions.h"
 
 #include <vector>
 #include <algorithm>
+#include <memory>
 
 
 namespace ngam {
@@ -40,25 +40,24 @@ namespace ngam {
 //definition of the different chemistry modules with an
 //identifier, a keyword to be located in the config file and a short version of the keyword
 namespace chemistry_modules{
-  enum id {iso, eq}; 
+  enum id {iso, eq};
   const std::vector<std::string> description {"isoprofile", "equilibrium"};
   const std::vector<std::string> description_short {"iso", "eq"};
 }
 
 
-inline Chemistry* selectChemistryModule(
-  const std::string chemistry_type, 
-  const std::vector<std::string>& parameters, 
-  GlobalConfig* config)
+inline std::unique_ptr<Chemistry> selectChemistryModule(
+  const std::string chemistry_type,
+  const std::vector<std::string>& parameters)
 {
   //find the corresponding chemistry module to the supplied "type" string
   auto it = std::find(
-    chemistry_modules::description.begin(), 
-    chemistry_modules::description.end(), 
+    chemistry_modules::description.begin(),
+    chemistry_modules::description.end(),
     chemistry_type);
   auto it_short = std::find(
-    chemistry_modules::description_short.begin(), 
-    chemistry_modules::description_short.end(), 
+    chemistry_modules::description_short.begin(),
+    chemistry_modules::description_short.end(),
     chemistry_type);
 
 
@@ -75,11 +74,11 @@ inline Chemistry* selectChemistryModule(
 
   if (it != chemistry_modules::description.end())
     module_id = static_cast<chemistry_modules::id>(
-      std::distance(chemistry_modules::description.begin(), 
+      std::distance(chemistry_modules::description.begin(),
       it));
   else
     module_id = static_cast<chemistry_modules::id>(
-      std::distance(chemistry_modules::description_short.begin(), 
+      std::distance(chemistry_modules::description_short.begin(),
       it_short));
 
 
@@ -88,20 +87,16 @@ inline Chemistry* selectChemistryModule(
     if (parameters.size() != 1) {
         std::string error_message = "Equilibrium chemistry requires exactly one parameter!\n";
         throw InvalidInput(std::string ("forward_model.config"), error_message);}
-    
-    FastChemChemistry* model = new FastChemChemistry(
-        parameters[0]);
 
-    return model;
+    return std::make_unique<FastChemChemistry>(parameters[0]);
   }
 
   if (module_id == chemistry_modules::iso)
   {
-    IsoprofileChemistry* model = new IsoprofileChemistry(parameters);
-    return model;
+    return std::make_unique<IsoprofileChemistry>(parameters);
   }
 
-  
+
   //we should never reach this point
   return nullptr;
 }

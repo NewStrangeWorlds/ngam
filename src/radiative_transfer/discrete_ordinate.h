@@ -25,6 +25,7 @@
 #include <vector>
 #include <iostream>
 #include <cmath>
+#include <functional>
 
 #include "radiative_transfer.h"
 #include "../atmosphere/atmosphere.h"
@@ -61,7 +62,7 @@ class DiscreteOrdinates : public RadiativeTransfer{
     //std::vector<disort_state> ds;
     //std::vector<disort_output> out;
     std::vector<disortpp::DisortFluxConfig> configs;
-    std::vector<disortpp::DisortFluxSolver<4>> solvers;
+    std::vector<std::function<disortpp::FluxResult(const disortpp::DisortFluxConfig&)>> solvers;
 
     void calculate(
       const OpacityCalculation& opacity,

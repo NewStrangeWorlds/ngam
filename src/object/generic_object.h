@@ -21,16 +21,16 @@
 #ifndef GENERIC_OBJECT_H
 #define GENERIC_OBJECT_H
 
-#include "../config/global_config.h"
+#include <memory>
+#include <vector>
+#include <string>
+
 #include "../spectral_grid/spectral_grid.h"
 #include "../transport_coeff/transport_coeff.h"
 #include "../transport_coeff/opacity_calc.h"
 #include "../atmosphere/atmosphere.h"
-#include "../chemistry/select_chemistry.h"
 #include "../chemistry/chemistry.h"
-#include "../temperature/select_temperature_profile.h"
 #include "../temperature/temperature.h"
-#include "../radiative_transfer/select_radiative_transfer.h"
 #include "../radiative_transfer/radiative_transfer.h"
 
 
@@ -40,62 +40,46 @@ namespace ngam{
 class GenericObject {
   public:
     GenericObject(
-      GlobalConfig* config_,
-      SpectralGrid* spectral_grid_) 
-      : radiation_field(spectral_grid_->nbSpectralPoints(), config_->nb_grid_points),
-        config(config_), 
+      SpectralGrid* spectral_grid_,
+      size_t nb_grid_points,
+      const std::vector<double>& atmos_boundary_pressures,
+      const std::string& cross_section_file_path,
+      const std::vector<std::string>& opacity_species_symbol,
+      const std::vector<std::string>& opacity_species_folder,
+      bool use_clouds,
+      std::vector<std::unique_ptr<Chemistry>> chemistry_,
+      std::unique_ptr<Temperature> temperature_profile_,
+      std::unique_ptr<RadiativeTransfer> radiative_transfer_)
+      : radiation_field(spectral_grid_->nbSpectralPoints(), nb_grid_points),
         spectral_grid(spectral_grid_),
-        atmosphere(config->nb_grid_points, config->atmos_boundary_pressures),
+        atmosphere(nb_grid_points, atmos_boundary_pressures),
         opacity(
-          config,
-          spectral_grid,
+          cross_section_file_path,
+          spectral_grid_,
           &atmosphere,
-          config->opacity_species_symbol,
-          config->opacity_species_folder,
-          config->cloud_model.size() > 0)
-    {
-      temperature.assign(config->nb_grid_points, 100.0);
-      pressure.assign(config->nb_grid_points, 1.0);
-
-      chemistry.assign(config->chemistry_model.size(), nullptr);
-
-      for (size_t i=0; i<config->chemistry_model.size(); ++i)
-        chemistry[i] = selectChemistryModule(
-          config->chemistry_model[i], 
-          config->chemistry_parameters[i], 
-          config);
-
-      temperature_profile = selectTemperatureProfile(
-        config->temperature_profile_type, 
-        config->temperature_profile_parameters);
-
-      radiative_transfer = selectRadiativeTransfer(
-        config->radiative_transfer_type,
-        config->radiative_transfer_parameters,
-        config->nb_grid_points,
-        config,
-        spectral_grid);
-    }
+          opacity_species_symbol,
+          opacity_species_folder,
+          use_clouds),
+        chemistry(std::move(chemistry_)),
+        temperature_profile(std::move(temperature_profile_)),
+        radiative_transfer(std::move(radiative_transfer_))
+    {}
     virtual ~GenericObject() {}
 
     virtual bool computeAtmosphericStructure() = 0;
 
-    std::vector<double> temperature;
-    std::vector<double> pressure;
+    const Atmosphere& getAtmosphere() const { return atmosphere; }
 
     RadiativeTransferOutput radiation_field;
   protected:
-    GlobalConfig* config;
     SpectralGrid* spectral_grid;
 
     Atmosphere atmosphere;
     OpacityCalculation opacity;
-    RadiativeTransfer* radiative_transfer = nullptr;
 
-    std::vector<Chemistry*> chemistry;
-    Temperature* temperature_profile = nullptr;
-
-    void computeOpacity();
+    std::vector<std::unique_ptr<Chemistry>> chemistry;
+    std::unique_ptr<Temperature> temperature_profile;
+    std::unique_ptr<RadiativeTransfer> radiative_transfer;
 };
 
 

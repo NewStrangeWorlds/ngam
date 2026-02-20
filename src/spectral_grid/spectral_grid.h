@@ -27,18 +27,21 @@
 
 namespace ngam {
 
-//forward declaration
-class GlobalConfig;
-
-
 
 class SpectralGrid{
   public:
-    SpectralGrid (GlobalConfig* global_config);
-    SpectralGrid (
-      GlobalConfig* global_config,
-      const double wavelength_min,
-      const double wavlength_max);
+    SpectralGrid(
+      const std::string& cross_section_file_path_,
+      const std::string& wavenumber_file_path_,
+      unsigned int spectral_discretisation_,
+      double spectral_resolution_);
+    SpectralGrid(
+      const std::string& cross_section_file_path_,
+      const std::string& wavenumber_file_path_,
+      unsigned int spectral_discretisation_,
+      double spectral_resolution_,
+      double wavelength_min,
+      double wavelength_max);
     ~SpectralGrid();
 
     std::vector<double> wavenumber_list;      //wavenumber list used to calculate the high-res spectra
@@ -87,8 +90,14 @@ class SpectralGrid{
       const std::vector<double>& data_y,
       const std::vector<double>& new_x,
       const bool log_interpolation);
+    std::string crossSectionFilePath() const {
+      return cross_section_file_path;}
+
   private:
-    GlobalConfig* config;
+    std::string cross_section_file_path;
+    std::string wavenumber_file_path;
+    unsigned int spectral_discretisation;
+    double spectral_resolution;
 
     std::vector<double> wavenumber_list_full; //the full, global wavenumber list, the opacities have been calculated at
     std::vector<double> wavelength_list_full; //the full, global wavelength list, the opacities have been calculated at

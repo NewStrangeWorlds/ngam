@@ -25,7 +25,6 @@
 #include <vector>
 
 #include "transport_coeff.h"
-#include "../config/global_config.h"
 #include "../spectral_grid/spectral_grid.h"
 #include "../atmosphere/atmosphere.h"
 
@@ -37,26 +36,22 @@ namespace ngam{
 class OpacityCalculation {
   public:
     OpacityCalculation(
-      GlobalConfig* config_, 
+      const std::string& cross_section_file_path,
       SpectralGrid* spectral_grid_,
       Atmosphere* atmosphere_,
-      const std::vector<std::string> opacity_species_symbol,
-      const std::vector<std::string> opacity_species_folder,
+      const std::vector<std::string>& opacity_species_symbol,
+      const std::vector<std::string>& opacity_species_folder,
       const bool use_cloud_)
       : spectral_grid(spectral_grid_)
       , atmosphere(atmosphere_)
       , transport_coeff(
-          config_, 
-          spectral_grid_, 
-          opacity_species_symbol, 
+          cross_section_file_path,
+          spectral_grid_,
+          opacity_species_symbol,
           opacity_species_folder)
       , use_cloud(use_cloud_)
       {}
-    ~OpacityCalculation();
-
     void calculate();
-      //std::vector<CloudModel*>& cloud_models,
-      //const std::vector<double>& cloud_parameter);
 
     std::vector< std::vector<double> > absorption_coeff;
     std::vector< std::vector<double> > scattering_coeff;
@@ -108,64 +103,6 @@ inline void OpacityCalculation::calculate()
   cloud_optical_depths.assign(nb_spectral_points, std::vector<double>(nb_grid_points-1, 0.0));
   cloud_single_scattering.assign(nb_spectral_points, std::vector<double>(nb_grid_points-1, 0.0));
   cloud_asym_param.assign(nb_spectral_points, std::vector<double>(nb_grid_points-1, 0.0));
-
-
-  // if (use_cloud)
-  // { 
-  //   size_t nb_param = 0;
-
-  //   for (auto & i : cloud_models)
-  //   {
-  //     std::vector<double> parameter(
-  //       cloud_parameter.begin() + nb_param, 
-  //       cloud_parameter.begin() + nb_param + i->nbParameters());
-
-  //     nb_param += i->nbParameters();
-
-  //     std::vector<std::vector<double>> optical_depths;
-  //     std::vector<std::vector<double>> single_scattering;
-  //     std::vector<std::vector<double>> asym_param;
-
-  //     i->opticalProperties(
-  //       parameter, 
-  //       *atmosphere, 
-  //       spectral_grid, 
-  //       optical_depths, 
-  //       single_scattering, 
-  //       asym_param);
-
-  //     for (size_t j=0; j<nb_spectral_points; ++j)
-  //       for (size_t k=0; k<nb_grid_points-1; ++k)
-  //       {
-  //         const double tau_scattering1 = cloud_optical_depths[j][k] * cloud_single_scattering[j][k];
-  //         const double tau_scattering2 = optical_depths[j][k] * cloud_single_scattering[j][k];
-  //         const double tau_scattering_mix = tau_scattering1 + tau_scattering2;
-          
-  //         const double optical_depth_mix = cloud_optical_depths[j][k] + optical_depths[j][k];
-          
-  //         double single_scattering_mix = 0;
-          
-  //         if (optical_depth_mix > 0)
-  //           single_scattering_mix = tau_scattering_mix / optical_depth_mix;
-
-  //         const double mix_asym_param = tau_scattering1/tau_scattering_mix * cloud_asym_param[j][k]
-  //                                     + tau_scattering2/tau_scattering_mix * asym_param[j][k];
-
-  //         cloud_optical_depths[j][k] = optical_depth_mix;
-  //         cloud_single_scattering[j][k] = single_scattering_mix;
-  //         cloud_asym_param[j][k] = mix_asym_param;
-  //       }
-  //   }
-  //}
-
-
-}
-
-
-
-inline OpacityCalculation::~OpacityCalculation()
-{
- 
 }
 
 

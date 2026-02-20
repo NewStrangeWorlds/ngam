@@ -27,7 +27,6 @@
 #include <fstream>
 #include <string>
 
-#include "../chemistry/chemistry.h"
 
 
 namespace ngam {
@@ -53,8 +52,7 @@ class Atmosphere {
       const double surface_gravity,
       const double bottom_radius,
       const bool use_variable_gravity,
-      std::vector<Chemistry*>& chemistry,
-      const std::vector<double>& chem_parameters);
+      const std::vector<double>& mean_molecular_weights);
 
   private:
     void createPressureGrid(const std::vector<double>& domain_boundaries);

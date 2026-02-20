@@ -30,7 +30,6 @@
 #include "species_definition.h"
 #include "../spectral_grid/spectral_grid.h"
 #include "../chemistry/chem_species.h"
-#include "../config/global_config.h"
 #include "../additional/exceptions.h"
 
 
@@ -38,12 +37,12 @@ namespace ngam{
 
 
 TransportCoefficients::TransportCoefficients(
-  GlobalConfig* config_ptr,
-  SpectralGrid* grid_ptr, 
+  const std::string& cross_section_file_path_,
+  SpectralGrid* grid_ptr,
   const std::vector<std::string>& opacity_species_symbol,
   const std::vector<std::string>& opacity_species_folder)
 {
-  config = config_ptr;
+  cross_section_file_path = cross_section_file_path_;
   spectral_grid = grid_ptr;
 
   std::vector<size_t> spectral_indices = spectral_grid->spectralIndexList();
@@ -101,12 +100,12 @@ bool TransportCoefficients::addOpacitySpecies(
   if (species_symbol == "CIA-H2-H2")
   {
     gas_species.push_back(
-      new GasGeneric(
-        config, 
-        spectral_grid, 
-        _H2, 
-        "CIA H2-H2", 
-        species_folder, 
+      std::make_unique<GasGeneric>(
+        cross_section_file_path,
+        spectral_grid,
+        _H2,
+        "CIA H2-H2",
+        species_folder,
         std::vector<size_t>{_H2}));
 
     return true;
@@ -115,27 +114,26 @@ bool TransportCoefficients::addOpacitySpecies(
   if (species_symbol == "CIA-H2-He")
   {
     gas_species.push_back(
-      new GasGeneric(
-        config, 
-        spectral_grid, 
-        _H2, 
-        "CIA H2-He", 
-        species_folder, 
+      std::make_unique<GasGeneric>(
+        cross_section_file_path,
+        spectral_grid,
+        _H2,
+        "CIA H2-He",
+        species_folder,
         std::vector<size_t>{_He}));
-   
+
     return true;
   }
-
 
   if (species_symbol == "CIA-H-He")
   {
     gas_species.push_back(
-      new GasGeneric(
-        config, 
-        spectral_grid, 
-        _H, 
-        "CIA H-He", 
-        species_folder, 
+      std::make_unique<GasGeneric>(
+        cross_section_file_path,
+        spectral_grid,
+        _H,
+        "CIA H-He",
+        species_folder,
         std::vector<size_t>{_He}));
 
     return true;
@@ -144,7 +142,7 @@ bool TransportCoefficients::addOpacitySpecies(
   //H- free-free and bound-free continuum
   if (species_symbol == "H-")
   {
-    gas_species.push_back(new GasHm(config, spectral_grid));
+    gas_species.push_back(std::make_unique<GasHm>(cross_section_file_path, spectral_grid));
 
     return true;
   }
@@ -152,62 +150,58 @@ bool TransportCoefficients::addOpacitySpecies(
   //H2 Rayleigh scattering
   if (species_symbol == "H2" && species_folder == "Rayleigh")
   {
-    gas_species.push_back(new GasH2Rayleigh(config, spectral_grid, ""));
-   
+    gas_species.push_back(std::make_unique<GasH2Rayleigh>(cross_section_file_path, spectral_grid, ""));
+
     return true;
   }
 
   //He Rayleigh scattering
   if (species_symbol == "He" && species_folder == "Rayleigh")
   {
-    gas_species.push_back(new GasHeRayleigh(config, spectral_grid, ""));
-   
+    gas_species.push_back(std::make_unique<GasHeRayleigh>(cross_section_file_path, spectral_grid, ""));
+
     return true;
   }
-  
+
   //H Rayleigh scattering
   if (species_symbol == "H" && species_folder == "Rayleigh")
   {
-    gas_species.push_back(new GasHRayleigh(config, spectral_grid, ""));
-   
+    gas_species.push_back(std::make_unique<GasHRayleigh>(cross_section_file_path, spectral_grid, ""));
+
     return true;
   }
 
   //CO Rayleigh
   if (species_symbol == "CO" && species_folder == "Rayleigh")
   {
-    gas_species.push_back(new GasCORayleigh(config, spectral_grid, ""));
+    gas_species.push_back(std::make_unique<GasCORayleigh>(cross_section_file_path, spectral_grid, ""));
 
     return true;
   }
-
 
   //CO2 Rayleigh
   if (species_symbol == "CO2" && species_folder == "Rayleigh")
   {
-    gas_species.push_back(new GasCO2Rayleigh(config, spectral_grid, ""));
+    gas_species.push_back(std::make_unique<GasCO2Rayleigh>(cross_section_file_path, spectral_grid, ""));
 
     return true;
   }
-
 
   //CH4 Rayleigh
   if (species_symbol == "CH4" && species_folder == "Rayleigh")
   {
-    gas_species.push_back(new GasCH4Rayleigh(config, spectral_grid, ""));
+    gas_species.push_back(std::make_unique<GasCH4Rayleigh>(cross_section_file_path, spectral_grid, ""));
 
     return true;
   }
-
 
   //H2O Rayleigh
   if (species_symbol == "H2O" && species_folder == "Rayleigh")
   {
-    gas_species.push_back(new GasH2ORayleigh(config, spectral_grid, ""));
+    gas_species.push_back(std::make_unique<GasH2ORayleigh>(cross_section_file_path, spectral_grid, ""));
 
     return true;
   }
-
 
   //now we try the generic ones
   for (size_t i=0; i<constants::species_data.size(); ++i)
@@ -215,15 +209,15 @@ bool TransportCoefficients::addOpacitySpecies(
     if (constants::species_data[i].symbol == species_symbol)
     {
       gas_species.push_back(
-        new GasGeneric(
-          config, 
-          spectral_grid, 
-          constants::species_data[i].id, 
-          constants::species_data[i].symbol, 
+        std::make_unique<GasGeneric>(
+          cross_section_file_path,
+          spectral_grid,
+          constants::species_data[i].id,
+          constants::species_data[i].symbol,
           species_folder));
 
       return true;
-    } 
+    }
   }
 
   //we haven't found the corresponding species
@@ -256,14 +250,6 @@ void TransportCoefficients::calculate(
       number_densities,
       absorption_coeff,
       scattering_coeff);
-}
-
-
-
-TransportCoefficients::~TransportCoefficients()
-{
-  for (unsigned int i=0; i<gas_species.size(); ++i)
-    delete gas_species[i];
 }
 
 

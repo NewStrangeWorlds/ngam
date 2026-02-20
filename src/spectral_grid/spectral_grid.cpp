@@ -28,17 +28,22 @@
 
 #include "spectral_grid.h"
 
-#include "../config/global_config.h"
 #include "../additional/exceptions.h"
 
 
 namespace ngam{
 
 
-SpectralGrid::SpectralGrid(GlobalConfig* global_config)
+SpectralGrid::SpectralGrid(
+  const std::string& cross_section_file_path_,
+  const std::string& wavenumber_file_path_,
+  unsigned int spectral_discretisation_,
+  double spectral_resolution_)
+  : cross_section_file_path(cross_section_file_path_),
+    wavenumber_file_path(wavenumber_file_path_),
+    spectral_discretisation(spectral_discretisation_),
+    spectral_resolution(spectral_resolution_)
 {
-  config = global_config;
-
   loadWavenumberList();
 
   wavelength_list_full = wavenumberToWavelength(wavenumber_list_full);
@@ -46,18 +51,23 @@ SpectralGrid::SpectralGrid(GlobalConfig* global_config)
 
 
 SpectralGrid::SpectralGrid(
-  GlobalConfig* global_config,
-  const double wavelength_min,
-  const double wavlength_max)
+  const std::string& cross_section_file_path_,
+  const std::string& wavenumber_file_path_,
+  unsigned int spectral_discretisation_,
+  double spectral_resolution_,
+  double wavelength_min,
+  double wavelength_max)
+  : cross_section_file_path(cross_section_file_path_),
+    wavenumber_file_path(wavenumber_file_path_),
+    spectral_discretisation(spectral_discretisation_),
+    spectral_resolution(spectral_resolution_)
 {
-  config = global_config;
-
   loadWavenumberList();
 
   wavelength_list_full = wavenumberToWavelength(wavenumber_list_full);
-  
-  std::vector<std::vector<double>> wavenumber_edges = 
-    {{wavelengthToWavenumber(wavlength_max), 
+
+  std::vector<std::vector<double>> wavenumber_edges =
+    {{wavelengthToWavenumber(wavelength_max),
       wavelengthToWavenumber(wavelength_min)}};
 
   std::vector<std::vector<size_t>> edge_indices;
@@ -81,7 +91,7 @@ void SpectralGrid::createHeliosWavenumberList()
 
 void SpectralGrid::loadWavenumberList()
 {
-  std::string file_name = config->wavenumber_file_path;
+  std::string file_name = wavenumber_file_path;
 
 
   std::fstream file;
@@ -127,7 +137,7 @@ void SpectralGrid::createHighResGridConstWavenumber(
 
     for (size_t j=edge_indices[i][0]; j<edge_indices[i][1]; ++j)
     { 
-      const double next_wavenumber = wavenumber_list_full[last_index] + config->spectral_resolution;
+      const double next_wavenumber = wavenumber_list_full[last_index] + spectral_resolution;
       
       if (next_wavenumber == wavenumber_list_full[j] || wavenumber_list_full[j+1] > next_wavenumber)
       { 
@@ -153,7 +163,7 @@ void SpectralGrid::createHighResGridConstWavelength(
 
     for (size_t j=edge_indices[i][0]; j<edge_indices[i][1]; ++j)
     {
-      const double next_wavelength = wavelength_list_full[last_index] - config->spectral_resolution;
+      const double next_wavelength = wavelength_list_full[last_index] - spectral_resolution;
 
       if (next_wavelength == wavelength_list_full[j] || wavelength_list_full[j+1] < next_wavelength)
       { 
@@ -179,7 +189,7 @@ void SpectralGrid::createHighResGridConstResolution(
 
     for (size_t j=edge_indices[i][0]; j<edge_indices[i][1]; ++j)
     { 
-      const double next_wavelength = wavelength_list_full[last_index] * (1 - 1./config->spectral_resolution);
+      const double next_wavelength = wavelength_list_full[last_index] * (1 - 1./spectral_resolution);
 
       if (next_wavelength == wavelength_list_full[j] || wavelength_list_full[j+1] < next_wavelength)
       { 
@@ -198,13 +208,13 @@ void SpectralGrid::createHighResGrid(
 {
   std::vector<int> included_points(wavenumber_list_full.size(), 0);
 
-  if (config->spectral_disecretisation == 0)
+  if (spectral_discretisation == 0)
     createHighResGridConstWavenumber(edge_indices, included_points);
 
-  if (config->spectral_disecretisation == 1)
+  if (spectral_discretisation == 1)
     createHighResGridConstWavelength(edge_indices, included_points);
 
-  if (config->spectral_disecretisation == 2)
+  if (spectral_discretisation == 2)
     createHighResGridConstResolution(edge_indices, included_points);
 
   

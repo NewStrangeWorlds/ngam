@@ -34,26 +34,25 @@
 namespace ngam{
 
 
-class GlobalConfig;
 class SpectralGrid;
 
 
 class GasGeneric : public OpacitySpecies {
   public:
     GasGeneric(
-      GlobalConfig* config_ptr, 
+      const std::string& cross_section_path, 
       SpectralGrid* spectral_grid_ptr, 
       const unsigned int index, 
       const std::string name, 
       const std::string folder) 
         : OpacitySpecies(index, name, folder) 
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           init();
         }
     GasGeneric(
-      GlobalConfig* config_ptr, 
+      const std::string& cross_section_path, 
       SpectralGrid* spectral_grid_ptr, 
       const unsigned int index, 
       const std::string name, 
@@ -61,12 +60,12 @@ class GasGeneric : public OpacitySpecies {
       const size_t reference_species) 
         : OpacitySpecies(index, name, folder) 
         {
-          config = config_ptr; spectral_grid = spectral_grid_ptr; 
+          cross_section_file_path = cross_section_path; spectral_grid = spectral_grid_ptr; 
           pressure_reference_species = reference_species; 
           init();
         }
     GasGeneric(
-      GlobalConfig* config_ptr, 
+      const std::string& cross_section_path, 
       SpectralGrid* spectral_grid_ptr, 
       const unsigned int index, 
       const std::string name, 
@@ -74,7 +73,7 @@ class GasGeneric : public OpacitySpecies {
       const std::vector<size_t> cia_collision_species) 
         : OpacitySpecies(index, name, folder)
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           cia_collision_partner = cia_collision_species; 
           init();
@@ -85,10 +84,10 @@ class GasGeneric : public OpacitySpecies {
 
 class GasHm : public OpacitySpecies {
   public:
-    GasHm(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr) 
+    GasHm(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
         : OpacitySpecies(_Hm, "H-", "Continuum")
         { 
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           continuum_available = true;
           init();
@@ -107,18 +106,18 @@ class GasHm : public OpacitySpecies {
 
 class GasHRayleigh : public OpacitySpecies {
   public:
-    GasHRayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr, const std::string folder) 
+    GasHRayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr, const std::string folder) 
         : OpacitySpecies(_H, "H Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
         }
-    GasHRayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr) 
+    GasHRayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
         : OpacitySpecies(_H, "H Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
@@ -131,18 +130,18 @@ class GasHRayleigh : public OpacitySpecies {
 
 class GasH2Rayleigh : public OpacitySpecies {
   public:
-    GasH2Rayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr, const std::string folder) 
+    GasH2Rayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr, const std::string folder) 
         : OpacitySpecies(_H2, "H2 Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
         }
-    GasH2Rayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr) 
+    GasH2Rayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
         : OpacitySpecies(_H2, "H2 Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
@@ -155,18 +154,18 @@ class GasH2Rayleigh : public OpacitySpecies {
 
 class GasHeRayleigh : public OpacitySpecies {
   public:
-    GasHeRayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr, const std::string folder)
+    GasHeRayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr, const std::string folder)
         : OpacitySpecies(_He, "He Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
         }
-    GasHeRayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr) 
+    GasHeRayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
         : OpacitySpecies(_He, "He Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
@@ -179,18 +178,18 @@ class GasHeRayleigh : public OpacitySpecies {
 
 class GasCORayleigh : public OpacitySpecies {
   public:
-    GasCORayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr, const std::string folder)
+    GasCORayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr, const std::string folder)
         : OpacitySpecies(_CO, "CO Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
         }
-    GasCORayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr) 
+    GasCORayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
         : OpacitySpecies(_CO, "CO Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
@@ -203,18 +202,18 @@ class GasCORayleigh : public OpacitySpecies {
 
 class GasCO2Rayleigh : public OpacitySpecies {
   public:
-    GasCO2Rayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr, const std::string folder)
+    GasCO2Rayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr, const std::string folder)
         : OpacitySpecies(_CO2, "CO2 Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
         }
-    GasCO2Rayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr) 
+    GasCO2Rayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
         : OpacitySpecies(_CO2, "CO2 Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
@@ -227,18 +226,18 @@ class GasCO2Rayleigh : public OpacitySpecies {
 
 class GasCH4Rayleigh : public OpacitySpecies {
   public:
-    GasCH4Rayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr, const std::string folder)
+    GasCH4Rayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr, const std::string folder)
         : OpacitySpecies(_CH4, "CH4 Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
         }
-    GasCH4Rayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr) 
+    GasCH4Rayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
         : OpacitySpecies(_CH4, "CH4 Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
@@ -252,18 +251,18 @@ class GasCH4Rayleigh : public OpacitySpecies {
 
 class GasH2ORayleigh : public OpacitySpecies {
   public:
-    GasH2ORayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr, const std::string folder)
+    GasH2ORayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr, const std::string folder)
         : OpacitySpecies(_H2O, "H2O Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();
         }
-    GasH2ORayleigh(GlobalConfig* config_ptr, SpectralGrid* spectral_grid_ptr) 
+    GasH2ORayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
         : OpacitySpecies(_H2O, "H2O Rayleigh", "Rayleigh")
         {
-          config = config_ptr; 
+          cross_section_file_path = cross_section_path; 
           spectral_grid = spectral_grid_ptr; 
           rayleigh_available = true;
           init();

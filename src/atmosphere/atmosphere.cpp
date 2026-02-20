@@ -69,40 +69,18 @@ void Atmosphere::calcAtmosphereStructure(
   const double surface_gravity,
   const double bottom_radius,
   const bool use_variable_gravity,
-  std::vector<Chemistry*>& chemistry,
-  const std::vector<double>& chem_parameters_all)
-{ 
-  //chemical composition
-  std::vector<double> mean_molecular_weights(nb_grid_points, 0.0);
-
-  number_densities.assign(
-    nb_grid_points,
-    std::vector<double>(constants::species_data.size(), 0.0));
-
-  size_t nb_chem_param = 0;
-
-  for (auto & i : chemistry)
-  {
-    std::vector<double> chem_parameters(
-      chem_parameters_all.begin() + nb_chem_param,
-      chem_parameters_all.begin() + nb_chem_param + i->nbParameters());
-    
-    nb_chem_param += i->nbParameters();
-    
-    bool neglect = i->calcChemicalComposition(
-      chem_parameters, temperature, pressure, number_densities, mean_molecular_weights);
-  }
-
+  const std::vector<double>& mean_molecular_weights)
+{
   calcMassDensity(mean_molecular_weights);
-  
+
   if (use_variable_gravity)
     calcAltitudeVariableGravity(
-      surface_gravity, 
+      surface_gravity,
       bottom_radius,
       mean_molecular_weights);
   else
     calcAltitude(surface_gravity, mean_molecular_weights);
-  
+
   calcScaleHeight(surface_gravity, mean_molecular_weights);
 }
 

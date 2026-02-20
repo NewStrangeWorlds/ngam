@@ -22,10 +22,10 @@
 #define TRANSPORT_COEFF_H
 
 #include <vector>
+#include <memory>
 
 #include "opacity_species.h"
 #include "../spectral_grid/spectral_grid.h"
-#include "../config/global_config.h"
 
 
 namespace ngam{
@@ -34,12 +34,10 @@ namespace ngam{
 class TransportCoefficients {
   public:
     TransportCoefficients(
-      GlobalConfig* config_ptr,
-      SpectralGrid* grid_ptr, 
+      const std::string& cross_section_file_path,
+      SpectralGrid* grid_ptr,
       const std::vector<std::string>& opacity_species_symbol,
       const std::vector<std::string>& opacity_species_folder);
-    ~TransportCoefficients();
-
     void calculate(
       const double temperature,
       const double pressure,
@@ -47,20 +45,11 @@ class TransportCoefficients {
       std::vector<double>& absorption_coeff,
       std::vector<double>& scattering_coeff);
 
-    void calculateGPU(
-      const double temperature,
-      const double pressure,
-      const std::vector<double>& number_densities,
-      const size_t nb_grid_points,
-      const size_t grid_point,
-      double* absorption_coeff_device,
-      double* scattering_coeff_device);
-
   private:
-    GlobalConfig* config = nullptr;
+    std::string cross_section_file_path;
     SpectralGrid* spectral_grid = nullptr;
 
-    std::vector<OpacitySpecies*> gas_species;
+    std::vector<std::unique_ptr<OpacitySpecies>> gas_species;
 
     bool addOpacitySpecies(
       const std::string& species_symbol, const std::string& species_folder);

@@ -30,29 +30,21 @@ namespace ngam {
 
 struct GlobalConfig {
   GlobalConfig() {};
-  GlobalConfig(const std::string retrieval_folder) {
-    loadConfigFile(retrieval_folder);};
 
   GlobalConfig(
     const std::string forward_model_type_,
     const std::string cross_section_file_path_,
-    const std::string spectral_disecretisation_,
+    const std::string spectral_discretisation_,
     const double resolution_);
 
-  bool loadConfigFile(std::string retrieval_folder);
-  
   std::string forward_model_type = "";
 
   std::string cross_section_file_path = "";
   std::string wavenumber_file_path = "";
-  std::string retrieval_folder_path = "";
-  
-  unsigned int spectral_disecretisation = 0;
+
+  unsigned int spectral_discretisation = 0;
   double spectral_resolution = 1000;
 
-  unsigned int nb_mpi_processes = 1;
-  unsigned int nb_omp_processes = 0;
-  
   unsigned int nb_disort_streams = 4;
 
   unsigned int nb_grid_points = 100;
@@ -62,9 +54,6 @@ struct GlobalConfig {
   bool use_variable_gravity = false;
 
   std::vector<double> atmos_boundary_pressures{1e2, 1e-6}; //in bar
-
-  // std::vector<std::string> chemistry_model{"iso"};
-  // std::vector< std::vector<std::string> > chemistry_parameters{{"H2O", "CO2"}};
 
   std::vector<std::string> chemistry_model{"eq"};
   std::vector< std::vector<std::string> > chemistry_parameters{{"fastchem_parameters.dat"}};

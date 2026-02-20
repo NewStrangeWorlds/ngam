@@ -23,6 +23,7 @@
 #include <fstream>
 #include <cmath>
 #include <vector>
+#include <memory>
 #include <omp.h>
 
 #include "discrete_ordinate.h"
@@ -208,7 +209,7 @@ void DiscreteOrdinates::calculate(
   else
     configs[thread_id].use_thermal_emission = false;
   
-  auto results = solvers[thread_id].solve(configs[thread_id]);
+  auto results = solvers[thread_id](configs[thread_id]);
   
   for (size_t j=0; j<nb_grid_points; ++j)
   {
@@ -281,10 +282,27 @@ void DiscreteOrdinates::setDISORTParam(
 }
 
 
+template<int NStr>
+static void assignFluxSolvers(
+  std::vector<std::function<disortpp::FluxResult(const disortpp::DisortFluxConfig&)>>& solvers,
+  int nb_threads)
+{
+  solvers.resize(nb_threads);
+
+  for (auto& s : solvers)
+  {
+    auto solver = std::make_shared<disortpp::DisortFluxSolver<NStr>>();
+    s = [solver](const disortpp::DisortFluxConfig& config) {
+      return solver->solve(config);
+    };
+  }
+}
+
+
 void DiscreteOrdinates::initDISORT()
-{ 
+{
   disortpp::DisortFluxConfig config(nb_grid_points-1, nb_streams, nb_streams);
-  
+
   config.use_thermal_emission = true;
 
   configs.assign(nb_threads, config);
@@ -294,7 +312,22 @@ void DiscreteOrdinates::initDISORT()
     c.allocate();
   }
 
-  solvers.assign(nb_threads, disortpp::DisortFluxSolver<4>());
+  switch(nb_streams) {
+    case 4:  assignFluxSolvers<4>(solvers, nb_threads);  break;
+    case 6:  assignFluxSolvers<6>(solvers, nb_threads);  break;
+    case 8:  assignFluxSolvers<8>(solvers, nb_threads);  break;
+    case 10: assignFluxSolvers<10>(solvers, nb_threads); break;
+    case 12: assignFluxSolvers<12>(solvers, nb_threads); break;
+    case 14: assignFluxSolvers<14>(solvers, nb_threads); break;
+    case 16: assignFluxSolvers<16>(solvers, nb_threads); break;
+    case 32: assignFluxSolvers<32>(solvers, nb_threads); break;
+    case 64: assignFluxSolvers<64>(solvers, nb_threads); break;
+    default:
+      throw InvalidInput(
+        "DiscreteOrdinates",
+        "Unsupported number of streams: " + std::to_string(nb_streams) +
+        ". DisortFluxSolver supports: 4, 6, 8, 10, 12, 14, 16, 32, 64.");
+  }
 }
 
 
