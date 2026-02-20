@@ -31,7 +31,7 @@
 #include "../additional/aux_functions.h"
 
 
-namespace bear{
+namespace ngam{
 
 
 

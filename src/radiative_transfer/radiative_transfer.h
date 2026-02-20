@@ -28,7 +28,7 @@
 #include "../spectral_grid/spectral_grid.h"
 
 
-namespace bear {
+namespace ngam {
 
 
 struct RadiativeTransferOutput {
@@ -41,12 +41,12 @@ struct RadiativeTransferOutput {
     flux_down_total.assign(nb_grid_points, 0.0);
     mean_intensity_total.assign(nb_grid_points, 0.0);
 
-    flux.assign(nb_spectral_points, std::vector<double>(nb_grid_points, 0.0));
-    flux_up.assign(nb_spectral_points, std::vector<double>(nb_grid_points, 0.0));
-    flux_down.assign(nb_spectral_points, std::vector<double>(nb_grid_points, 0.0));
-    mean_intensity.assign(nb_spectral_points, std::vector<double>(nb_grid_points, 0.0));
+    flux.assign(nb_grid_points, std::vector<double>(nb_spectral_points, 0.0));
+    flux_up.assign(nb_grid_points, std::vector<double>(nb_spectral_points, 0.0));
+    flux_down.assign(nb_grid_points, std::vector<double>(nb_spectral_points, 0.0));
+    mean_intensity.assign(nb_grid_points, std::vector<double>(nb_spectral_points, 0.0));
   }
-  
+
   std::vector<double> spectrum;
 
   std::vector<double> flux_total;
@@ -67,7 +67,7 @@ class RadiativeTransfer{
     RadiativeTransfer(SpectralGrid* spectral_grid_) {
       spectral_grid = spectral_grid_;};
     virtual ~RadiativeTransfer() {}
-    virtual void calcSpectrum(
+    virtual void calculate(
       const Atmosphere& atmosphere,
       const OpacityCalculation& opacity,
       RadiativeTransferOutput& output) = 0;

@@ -33,10 +33,10 @@
 #include "../additional/quadrature.h"
 
 
-namespace bear{
+namespace ngam{
 
 
-void ShortCharacteristics::calcSpectrum(
+void ShortCharacteristics::calculate(
   const Atmosphere& atmosphere,
   const OpacityCalculation& opacity,
   RadiativeTransferOutput& output)
@@ -44,7 +44,7 @@ void ShortCharacteristics::calcSpectrum(
 
   #pragma omp parallel for schedule(dynamic, 1)
   for (size_t i=0; i<output.spectrum.size(); ++i)
-    output.spectrum[i] = calcSpectrum(
+    output.spectrum[i] = calculate(
       opacity.absorption_coeff[i], 
       opacity.cloud_optical_depths[i], 
       atmosphere.temperature, 
@@ -54,7 +54,7 @@ void ShortCharacteristics::calcSpectrum(
 
 
 
-double ShortCharacteristics::calcSpectrum(
+double ShortCharacteristics::calculate(
   const std::vector<double>& absorption_coeff,
   const std::vector<double>& cloud_optical_depth,
   const std::vector<double>& temperature,

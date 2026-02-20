@@ -28,7 +28,7 @@
 #include "../additional/physical_const.h"
 
 
-namespace bear {
+namespace ngam {
 
 
 IsoprofileChemistry::IsoprofileChemistry(const std::vector<std::string>& chemical_species)

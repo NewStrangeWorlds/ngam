@@ -34,7 +34,7 @@
 #include "../radiative_transfer/radiative_transfer.h"
 
 
-namespace bear{
+namespace ngam{
 
 
 class GenericObject {
@@ -99,6 +99,6 @@ class GenericObject {
 };
 
 
-} // namespace bear
+} // namespace ngam
 
 #endif // GENERIC_OBJECT_H

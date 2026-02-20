@@ -18,33 +18,37 @@
 */
 
 
-#ifndef _isoprofile_chemistry_h
-#define _isoprofile_chemistry_h
+#include "time_stepping_temperature.h"
+#include "../additional/exceptions.h"
+#include "../additional/physical_const.h"
+#include "../atmosphere/atmosphere.h"
 
-#include "chemistry.h"
-
-
+#include <algorithm>
 #include <vector>
-#include <string>
+#include <cmath>
 
 
 namespace ngam {
 
 
-class IsoprofileChemistry : public Chemistry{
-  public:
-    IsoprofileChemistry(const std::vector<std::string>& chemical_species);
-    virtual ~IsoprofileChemistry() {}
-    virtual bool calcChemicalComposition(
-      const std::vector<double>& parameters,
-      const std::vector<double>& temperature,
-      const std::vector<double>& pressure,
-      std::vector<std::vector<double>>& number_densities,
-      std::vector<double>& mean_molecular_weight);
-  protected:
-    bool sodium_free_parameter = false;
-};
+
+//calculate the temperature based on the analytical Milne solution
+bool TimeSteppingTemperature::calcProfile(
+  const std::vector<double>& parameters, 
+  const double surface_gravity,
+  Atmosphere& atmosphere)
+{
+  temperature.assign(pressure.size(), 0);
+
+  const double kappa_ross = parameters[0];
+  const double t_eff = parameters[1];
+
+
+
+  return neglect_model;
+}
+
 
 
 }
-#endif 
+

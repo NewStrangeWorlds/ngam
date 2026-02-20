@@ -28,7 +28,7 @@
 
 
 
-namespace bear {
+namespace ngam {
 
 
 class ConstantTemperature : public Temperature{

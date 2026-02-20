@@ -27,7 +27,7 @@
 #include "chem_species.h"
 
 
-namespace bear {
+namespace ngam {
 
 
 class Chemistry{

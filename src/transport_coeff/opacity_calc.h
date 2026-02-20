@@ -31,7 +31,7 @@
 
 
 
-namespace bear{
+namespace ngam{
 
 
 class OpacityCalculation {

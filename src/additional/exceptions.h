@@ -27,7 +27,7 @@
 #include <stdexcept>
 
 
-namespace bear{
+namespace ngam{
 
 class FileNotFound : public std::runtime_error {
   public:

@@ -22,7 +22,7 @@
 #define	_PHYSICAL_CONSTANTS_H
 
 
-namespace bear{  namespace constants{
+namespace ngam{  namespace constants{
 
 //physical constants in cgs units from the GSL library
 constexpr double planck_h = 6.62606896e-27;                     //Planck constant in g cm^2 / s

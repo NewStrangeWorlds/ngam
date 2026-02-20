@@ -25,7 +25,7 @@
 #include <cstddef>
 
 
-namespace bear {
+namespace ngam {
 
 
 class Temperature{

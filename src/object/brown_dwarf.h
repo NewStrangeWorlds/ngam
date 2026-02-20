@@ -30,7 +30,7 @@
 #include "generic_object.h"
 
 
-namespace bear{
+namespace ngam{
 
 class BrownDwarf : public GenericObject {
   public:
@@ -48,24 +48,30 @@ class BrownDwarf : public GenericObject {
       
       std::vector<double> chem_parameters{0.5, 0.5};
       std::vector<double> temp_parameters{1e-4, 3000.0};
+
+      //temperature profile
+      temperature_profile->calcProfile(
+        temp_parameters, 
+        config->surface_gravity, 
+        atmosphere.pressure, 
+        atmosphere.temperature);
       
       atmosphere.calcAtmosphereStructure(
         config->surface_gravity,
         config->bottom_radius,
         config->use_variable_gravity,
-        temperature_profile,
-        temp_parameters,
         chemistry,
         chem_parameters);
       
       opacity.calculate();
 
-      radiative_transfer->calcSpectrum(
+      radiative_transfer->calculate(
         atmosphere,
         opacity,
         radiation_field);
       
-
+      for (size_t i=0; i<radiation_field.flux_total.size(); ++i)
+        std::cout << "Level " << i << ": Flux = " << radiation_field.flux_total[i] << " erg/cm2/s\n";
 
       std::string file_name = "spectrum.dat";
   
@@ -80,6 +86,6 @@ class BrownDwarf : public GenericObject {
     }
 };
 
-} // namespace bear
+} // namespace ngam
 
 #endif // BROWN_DWARF_H

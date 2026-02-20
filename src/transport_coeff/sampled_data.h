@@ -26,7 +26,7 @@
 #include <cmath>
 
 
-namespace bear{
+namespace ngam{
 
 
 class CrossSectionFile {

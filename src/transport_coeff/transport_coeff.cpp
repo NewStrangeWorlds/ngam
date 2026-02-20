@@ -34,7 +34,7 @@
 #include "../additional/exceptions.h"
 
 
-namespace bear{
+namespace ngam{
 
 
 TransportCoefficients::TransportCoefficients(
@@ -45,7 +45,6 @@ TransportCoefficients::TransportCoefficients(
 {
   config = config_ptr;
   spectral_grid = grid_ptr;
-
 
   std::vector<size_t> spectral_indices = spectral_grid->spectralIndexList();
   

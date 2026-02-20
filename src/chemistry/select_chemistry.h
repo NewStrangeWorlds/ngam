@@ -34,7 +34,7 @@
 #include <algorithm>
 
 
-namespace bear {
+namespace ngam {
 
 
 //definition of the different chemistry modules with an

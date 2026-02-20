@@ -28,7 +28,7 @@
 #include <cmath>
 
 
-namespace bear{
+namespace ngam{
 
 void CrossSectionFile::loadFile()
 {

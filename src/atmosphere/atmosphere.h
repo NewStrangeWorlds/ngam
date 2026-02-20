@@ -28,10 +28,9 @@
 #include <string>
 
 #include "../chemistry/chemistry.h"
-#include "../temperature/temperature.h"
 
 
-namespace bear {
+namespace ngam {
 
 
 class Atmosphere {
@@ -47,19 +46,20 @@ class Atmosphere {
     std::vector<double> temperature;
     std::vector<double> altitude;
     std::vector<double> scale_height;
+    std::vector<double> mass_density;
     std::vector< std::vector<double> > number_densities;
 
-    bool calcAtmosphereStructure(
+    void calcAtmosphereStructure(
       const double surface_gravity,
       const double bottom_radius,
       const bool use_variable_gravity,
-      Temperature* temperature_profile,
-      const std::vector<double>& temp_parameters,
       std::vector<Chemistry*>& chemistry,
       const std::vector<double>& chem_parameters);
 
   private:
     void createPressureGrid(const std::vector<double>& domain_boundaries);
+    void calcMassDensity(
+      const std::vector<double>& mean_molecular_weights);
     void calcAltitude(
       const double g, const std::vector<double>& mean_molecular_weights);
     void calcAltitudeVariableGravity(

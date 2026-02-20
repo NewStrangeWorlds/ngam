@@ -34,7 +34,7 @@
 #include "constant_temperature.h"
 
 
-namespace bear {
+namespace ngam {
 
 //definition of the different chemistry modules with an
 //identifier, a keyword to be located in the config file and a short version of the keyword

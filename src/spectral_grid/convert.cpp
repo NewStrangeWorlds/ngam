@@ -25,7 +25,7 @@
 #include <fstream>
 #include <vector>
 
-namespace bear{
+namespace ngam{
 
 
 //convert wavenumbers in cm-1 to wavelengths in microns

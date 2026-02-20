@@ -32,7 +32,7 @@
 #include "../additional/physical_const.h"
 
 
-namespace bear{
+namespace ngam{
 
 
 Atmosphere::Atmosphere(
@@ -46,30 +46,32 @@ Atmosphere::Atmosphere(
   temperature.assign(nb_grid_points, 0.0);
   altitude.assign(nb_grid_points, 0.0);
   scale_height.assign(nb_grid_points, 0.0);
+  mass_density.assign(nb_grid_points, 0.0);
+  
   number_densities.assign(
     nb_grid_points, 
     std::vector<double>(constants::species_data.size(), 0.0));
 }
 
 
-bool Atmosphere::calcAtmosphereStructure(
+
+void Atmosphere::calcMassDensity(
+  const std::vector<double>& mean_molecular_weights)
+{
+  for (size_t i=0; i<nb_grid_points; ++i)
+    mass_density[i] = mean_molecular_weights[i] * pressure[i]*1e6 
+      / (constants::gas_constant  * temperature[i]);
+}
+
+
+
+void Atmosphere::calcAtmosphereStructure(
   const double surface_gravity,
   const double bottom_radius,
   const bool use_variable_gravity,
-  Temperature* temperature_profile,
-  const std::vector<double>& temp_parameters,
   std::vector<Chemistry*>& chemistry,
   const std::vector<double>& chem_parameters_all)
 { 
-  bool neglect_model = false;
-
-  //temperature profile
-  bool neglect_temperature = temperature_profile->calcProfile(
-    temp_parameters, surface_gravity, pressure, temperature);
-
-  if (neglect_temperature) neglect_model = true;
-
-
   //chemical composition
   std::vector<double> mean_molecular_weights(nb_grid_points, 0.0);
 
@@ -89,10 +91,9 @@ bool Atmosphere::calcAtmosphereStructure(
     
     bool neglect = i->calcChemicalComposition(
       chem_parameters, temperature, pressure, number_densities, mean_molecular_weights);
-    
-    if (neglect) neglect_model = true;
   }
-  
+
+  calcMassDensity(mean_molecular_weights);
   
   if (use_variable_gravity)
     calcAltitudeVariableGravity(
@@ -103,8 +104,6 @@ bool Atmosphere::calcAtmosphereStructure(
     calcAltitude(surface_gravity, mean_molecular_weights);
   
   calcScaleHeight(surface_gravity, mean_molecular_weights);
-
-  return neglect_model;
 }
 
 
@@ -115,10 +114,6 @@ void Atmosphere::calcAltitude(
   const std::vector<double>& mean_molecular_weights)
 {
   altitude.assign(nb_grid_points, 0.0);
-  std::vector<double> mass_density(nb_grid_points, 0.0);
-
-  for (size_t i=0; i<nb_grid_points; ++i)
-    mass_density[i] = mean_molecular_weights[i] * pressure[i]*1e6 / (constants::gas_constant  * temperature[i]);
 
   for (size_t i=1; i<nb_grid_points; i++)
   {
@@ -139,10 +134,6 @@ void Atmosphere::calcAltitudeVariableGravity(
   const std::vector<double>& mean_molecular_weights)
 { 
   altitude.assign(nb_grid_points, 0.0);
-  std::vector<double> mass_density(nb_grid_points, 0.0);
-
-  for (size_t i=0; i<nb_grid_points; ++i)
-    mass_density[i] = mean_molecular_weights[i] * pressure[i]*1e6 / (constants::gas_constant  * temperature[i]);
   
   for (size_t i=1; i<nb_grid_points; i++)
   { 

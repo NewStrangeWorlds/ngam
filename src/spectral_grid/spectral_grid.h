@@ -25,7 +25,7 @@
 #include <string>
 
 
-namespace bear {
+namespace ngam {
 
 //forward declaration
 class GlobalConfig;

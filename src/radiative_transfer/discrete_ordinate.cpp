@@ -33,121 +33,194 @@
 #include "../additional/quadrature.h"
 #include "../spectral_grid/spectral_grid.h"
 #include "../additional/exceptions.h"
+#include "../additional/quadrature.h"
 
-extern "C" {
-  #include "cdisort_src/cdisort_macros.h"
-  #include "cdisort_src/cdisort.h"
-}
+#include "../../_deps/disortpp-src/src/DisortFluxConfig.hpp"
+#include "../../_deps/disortpp-src/src/FluxResult.hpp"
+#include "../../_deps/disortpp-src/src/FluxSolver.hpp"
 
-
-
-namespace bear{
-
-/*
- * Disort-specific shift macros.
- * Using unit-offset shift macros to match Fortran version
- */
-#undef  DTAUC
-#define DTAUC(lc)  ds.dtauc[lc-1]
-#undef  PHI
-#define PHI(j)     ds.phi[j-1]
-#undef  PMOM
-#define PMOM(k,lc) ds.pmom[k+(lc-1)*(ds.nmom_nstr+1)]
-#undef  SSALB
-#define SSALB(lc)  ds.ssalb[lc-1]
-#undef  TEMPER
-#define TEMPER(lc) ds.temper[lc]
-#undef  UMU
-#define UMU(iu)    ds.umu[iu-1]
-#undef  UTAU
-#define UTAU(lu)   ds.utau[lu-1]
+namespace ngam{
 
 
 DiscreteOrdinates::DiscreteOrdinates(
   SpectralGrid* spectral_grid_ptr,
   const size_t nb_streams,
   const size_t nb_grid_points)
-   : RadiativeTransfer(spectral_grid_ptr)
+   : RadiativeTransfer(spectral_grid_ptr),
+      nb_streams(nb_streams),
+      nb_grid_points(nb_grid_points),
+      nb_layers(nb_grid_points - 1)
 { 
-  initDISORT(nb_streams, nb_grid_points-1);
+  nb_threads = omp_get_max_threads();
+
+  initDISORT();
 }
 
 
 
-void DiscreteOrdinates::calcSpectrum(
+void DiscreteOrdinates::calculate(
   const Atmosphere& atmosphere,
   const OpacityCalculation& opacity,
   RadiativeTransferOutput& output)
 { 
-  for (size_t i=0; i<ds.size(); ++i)
+  for (size_t i=0; i<configs.size(); ++i)
   {
     setTemperatureStructure(atmosphere.temperature, atmosphere.temperature[0]);
   }
 
-
-  #pragma omp parallel for
-  for (size_t i=0; i<output.spectrum.size(); ++i)
-    output.spectrum[i] = calcSpectrum(opacity.absorption_coeff[i], opacity.scattering_coeff[i], opacity.cloud_optical_depths[i], atmosphere.altitude, i);
-}
+  const double max_temperature = *std::max_element(
+    atmosphere.temperature.begin(), 
+    atmosphere.temperature.end());
 
 
-
-
-double DiscreteOrdinates::calcSpectrum(
-  const std::vector<double> absorption_coeff,
-  const std::vector<double> scattering_coeff,
-  const std::vector<double>& cloud_optical_depth,
-  const std::vector<double>& vertical_grid,
-  const size_t nu_index)
-{
-  size_t nb_grid_points = absorption_coeff.size();
-
-  std::vector<double> optical_depth(nb_grid_points-1, 0.0);
-
-
-  for (size_t j=0; j<nb_grid_points - 1; ++j)
-    optical_depth[j] = (vertical_grid[j+1] - vertical_grid[j]) * (absorption_coeff[j+1] + absorption_coeff[j])/2.;
-
-  if (cloud_optical_depth.size() != 0)
-    for (size_t i=0; i<nb_grid_points-1; ++i) optical_depth[i] += cloud_optical_depth[i];
-
-
-  const double wavenumber = spectral_grid->wavenumber_list[nu_index];
-  std::vector<double> single_scattering_albedo(nb_grid_points-1, 0.0);
   double surface_albedo = 0;
-
-
-  setOpticalDepth(wavenumber, optical_depth, single_scattering_albedo, single_scattering_albedo, surface_albedo);
-
   double incident_radiation = 0;
   double zenith_angle = 0.5;
+  
+  #pragma omp parallel for
+  for (size_t i=0; i<output.spectrum.size(); ++i)
+    calculate(
+      opacity, 
+      atmosphere.altitude, 
+      surface_albedo,
+      incident_radiation,
+      zenith_angle,
+      i,
+      max_temperature,
+      output);
 
-
-  std::vector<double> flux_down(nb_grid_points, 0.0);
-  std::vector<double> flux_up(nb_grid_points, 0.0);
-  std::vector<double> mean_intensity(nb_grid_points, 0.0);
-
-  calcRadiativeTransfer(incident_radiation, zenith_angle, flux_up, flux_down, mean_intensity);
-
-  return flux_up.back();
+  integrateQuantities(output);
 }
 
 
 
-void DiscreteOrdinates::calcRadiativeTransfer(
-  double incident_stellar_radiation,
-  double zenith_angle,
-  std::vector<double>& flux_up,
-  std::vector<double>& flux_down,
-  std::vector<double>& mean_intensity)
-{ 
-  const int thread(omp_get_thread_num());
+void DiscreteOrdinates::integrateQuantities(RadiativeTransferOutput& output)
+{
+  #pragma omp parallel for
+  for (size_t i=0; i<nb_grid_points; ++i)
+  {
+    output.flux_up_total[i] = aux::quadratureTrapezoidal(
+      spectral_grid->wavenumber_list,
+      output.flux_up[i]);
+    
+    output.flux_down_total[i] = aux::quadratureTrapezoidal(
+      spectral_grid->wavenumber_list,
+      output.flux_down[i]);
 
-  ds[thread].bc.fbeam = incident_stellar_radiation;
-  ds[thread].bc.umu0  = zenith_angle;
+    output.flux_total[i] = output.flux_up_total[i] - output.flux_down_total[i];
+    
+    output.mean_intensity_total[i] = aux::quadratureTrapezoidal(
+      spectral_grid->wavenumber_list,
+      output.mean_intensity[i]);
+  }
+}
 
 
-  runDISORT(flux_up, flux_down, mean_intensity);
+
+void DiscreteOrdinates::calcTotalTransportCoeff(
+  const OpacityCalculation& opacity,
+  const std::vector<double>& altitude, 
+  const size_t nu_index,
+  std::vector<double>& optical_depth,
+  std::vector<double>& single_scattering_albedo,
+  std::vector<double>& asymmetry_parameter)
+{
+
+  for (size_t j=0; j<nb_layers; ++j)
+  {
+    const double gas_abs_coeff_1 = opacity.absorption_coeff[nu_index][j];
+    const double gas_abs_coeff_2 = opacity.absorption_coeff[nu_index][j+1];
+
+    const double gas_scat_coeff_1 = opacity.scattering_coeff[nu_index][j];
+    const double gas_scat_coeff_2 = opacity.scattering_coeff[nu_index][j+1];
+
+    const double gas_tau_abs = (altitude[j+1] - altitude[j]) 
+      * (gas_abs_coeff_2 + gas_abs_coeff_1)/2.;
+    const double gas_tau_scat = (altitude[j+1] - altitude[j]) 
+      * (gas_scat_coeff_2 + gas_scat_coeff_1)/2.;
+
+    const double cloud_tau_abs = opacity.cloud_optical_depths[nu_index][j] 
+      * (1.0 - opacity.cloud_single_scattering[nu_index][j]);
+
+    const double cloud_tau_scat = opacity.cloud_optical_depths[nu_index][j] 
+      * opacity.cloud_single_scattering[nu_index][j];
+
+    const double total_tau_abs = gas_tau_abs + cloud_tau_abs;
+    const double total_tau_scat = gas_tau_scat + cloud_tau_scat;
+    const double total_tau = total_tau_abs + total_tau_scat;
+
+    optical_depth[j] = total_tau;
+
+    if (total_tau > 0)
+      single_scattering_albedo[j] = total_tau_scat / total_tau;
+    else
+      single_scattering_albedo[j] = 0.0;
+
+    if (single_scattering_albedo[j] > 0.999999)
+      single_scattering_albedo[j] = 0.999999;
+
+    if (gas_tau_scat + cloud_tau_scat > 0)
+      asymmetry_parameter[j] = cloud_tau_scat / (gas_tau_scat + cloud_tau_scat)
+        * opacity.cloud_asym_param[nu_index][j];
+    else
+      asymmetry_parameter[j] = 0.0;
+  }
+}
+
+
+
+void DiscreteOrdinates::calculate(
+  const OpacityCalculation& opacity,
+  const std::vector<double>& vertical_grid,
+  const double surface_albedo,
+  const double incident_radiation,
+  const double zenith_angle,
+  const size_t nu_index,
+  const double max_temperature,
+  RadiativeTransferOutput& output)
+{
+  std::vector<double> optical_depth(nb_layers, 0.0);
+  std::vector<double> single_scattering_albedo(nb_layers, 0.0);
+  std::vector<double> asymmetry_parameter(nb_layers, 0.0);
+
+  calcTotalTransportCoeff(
+    opacity, 
+    vertical_grid, 
+    nu_index, 
+    optical_depth, 
+    single_scattering_albedo, 
+    asymmetry_parameter);
+  
+  const double wavenumber = spectral_grid->wavenumber_list[nu_index];
+  const int thread_id = omp_get_thread_num();
+  
+  setDISORTParam(
+    thread_id,
+    wavenumber, 
+    optical_depth, 
+    single_scattering_albedo, 
+    asymmetry_parameter, 
+    incident_radiation,
+    zenith_angle,
+    surface_albedo);
+  if (aux::planckFunctionWavenumber(max_temperature, wavenumber) > 1.e-35)
+    configs[thread_id].use_thermal_emission = true;
+  else
+    configs[thread_id].use_thermal_emission = false;
+  
+  auto results = solvers[thread_id].solve(configs[thread_id]);
+  
+  for (size_t j=0; j<nb_grid_points; ++j)
+  {
+    output.flux_up[j][nu_index]  = results.flux_up[nb_grid_points - j - 1];
+    output.flux_down[j][nu_index] = results.flux_down[nb_grid_points - j - 1] 
+      + results.flux_direct_beam[nb_grid_points - j - 1];
+    
+    output.flux[j][nu_index] = output.flux_up[j][nu_index] - output.flux_down[j][nu_index];
+    output.mean_intensity[j][nu_index] = results.mean_intensity[nb_grid_points - j - 1];
+  }
+  
+  output.spectrum[nu_index] = output.flux_up.back()[nu_index];
 }
 
 
@@ -156,152 +229,73 @@ void DiscreteOrdinates::setTemperatureStructure(
   const std::vector<double>& temperature_structure,
   const double& surface_temperature)
 {
-
-  for (size_t j=0; j<ds.size(); ++j)
+  std::vector<double> temp_structure_reversed(
+    temperature_structure.rbegin(), 
+    temperature_structure.rend());
+  
+  for (size_t j=0; j<configs.size(); ++j)
   {
-    ds[j].bc.btemp = surface_temperature;
-
-    for (size_t i=0; i<temperature_structure.size(); i++)
-      ds[j].temper[i] = temperature_structure[temperature_structure.size() - i - 1];
+    configs[j].temperature_bottom = surface_temperature;
+  
+    for (size_t i=0; i<nb_grid_points; i++)
+      configs[j].temperature[i] = temp_structure_reversed[i];
   }
 
 }
 
 
 
-void DiscreteOrdinates::setOpticalDepth(
+void DiscreteOrdinates::setDISORTParam(
+  const int thread_id,
   const double wavenumber_input,
   const std::vector<double>& optical_depth,
-	const std::vector<double>& single_scattering_albedo,
+  const std::vector<double>& single_scattering_albedo,
   const std::vector<double>& asymmetry_parameter,
-	const double surface_albedo)
+  const double incident_radiation,
+  const double zenith_angle,
+  const double surface_albedo)
 { 
-  const int thread(omp_get_thread_num());
+  configs[thread_id].surface_albedo  = surface_albedo;
+  configs[thread_id].direct_beam_flux = incident_radiation;
+  configs[thread_id].direct_beam_mu = zenith_angle;
 
-  ds[thread].bc.albedo  = surface_albedo;
+  configs[thread_id].wavenumber_low = wavenumber_input;
+  configs[thread_id].wavenumber_high = wavenumber_input;
 
-  ds[thread].wvnmlo = wavenumber_input;
-  ds[thread].wvnmhi = wavenumber_input;
-
-
-  for (int lc = 0; lc < ds[thread].nlyr; lc++)
+  for (int lc = 0; lc < nb_layers; lc++)
   {
-    ds[thread].dtauc[lc] = optical_depth[ds[thread].nlyr - lc - 1];
-    ds[thread].ssalb[lc] = single_scattering_albedo[ds[thread].nlyr - lc - 1];
+    configs[thread_id].delta_tau[lc] = optical_depth[nb_layers - lc - 1];
+    configs[thread_id].single_scat_albedo[lc] = single_scattering_albedo[nb_layers - lc - 1];
   }
 
-  for (int lc = 0; lc < ds[thread].nlyr; lc++)
+  for (int lc = 0; lc < nb_layers; lc++)
   {
-    double gg = asymmetry_parameter[ds[thread].nlyr - lc - 1];
+    double gg = asymmetry_parameter[nb_layers - lc - 1];
 
     if (gg > 0)
-      c_getmom(HENYEY_GREENSTEIN,gg,ds[thread].nmom,&ds[thread].pmom[0 + (lc)*(ds[thread].nmom_nstr+1)]);
+      configs[thread_id].setHenyeyGreenstein(gg, lc);
     else
-      c_getmom(RAYLEIGH,gg,ds[thread].nmom,&ds[thread].pmom[0 + (lc)*(ds[thread].nmom_nstr+1)]);
+      configs[thread_id].setRayleigh(lc);
   }
 
 }
 
 
-void DiscreteOrdinates::initDISORT(unsigned int nb_streams, unsigned int nb_layers)
+void DiscreteOrdinates::initDISORT()
 { 
-  disort_state ds_gen;
-
-  ds_gen.nstr   = nb_streams;
-  ds_gen.nphase = ds_gen.nstr;
-  ds_gen.nlyr   = nb_layers;
-  ds_gen.nmom   = nb_streams;
-  ds_gen.ntau   = 0;
-  ds_gen.numu   = 0;
-  ds_gen.nphi   = 0;
-  ds_gen.flag.usrtau = 0;
-  ds_gen.flag.planck = 1;
-
-
-  ds_gen.accur = 0.;
-  //ds_gen.flag.prnt[0]=TRUE, ds_gen.flag.prnt[1]=TRUE, ds_gen.flag.prnt[2]=TRUE, ds_gen.flag.prnt[3]=TRUE, ds_gen.flag.prnt[4]=TRUE;
-  ds_gen.flag.prnt[0]=FALSE, ds_gen.flag.prnt[1]=FALSE, ds_gen.flag.prnt[2]=FALSE, ds_gen.flag.prnt[3]=FALSE, ds_gen.flag.prnt[4]=FALSE;
-
-  ds_gen.flag.ibcnd  = GENERAL_BC;
-  ds_gen.flag.usrtau = FALSE;
-  ds_gen.flag.usrang = FALSE;
-  ds_gen.flag.lamber = TRUE;
-  ds_gen.flag.onlyfl = TRUE;
-  ds_gen.flag.quiet  = TRUE;
-  ds_gen.flag.spher  = FALSE;
-  ds_gen.flag.general_source = FALSE;
-  ds_gen.flag.output_uum = FALSE;
-  ds_gen.flag.intensity_correction = TRUE;
-  ds_gen.flag.old_intensity_correction = FALSE;
-
-
-  ds_gen.bc.fisot = 0;
-  ds_gen.bc.phi0  = 0.0;
-  ds_gen.bc.fluor = 0.;
-
-  ds_gen.flag.brdf_type = BRDF_NONE;
-
-  ds_gen.bc.ttemp   = 0;
-  ds_gen.bc.temis   = 0;
-
-
-  const int nb_cores(omp_get_max_threads());
+  disortpp::DisortFluxConfig config(nb_grid_points-1, nb_streams, nb_streams);
   
-  ds.assign(nb_cores, ds_gen);
-  out.resize(nb_cores);
+  config.use_thermal_emission = true;
 
+  configs.assign(nb_threads, config);
 
-  /* Allocate memory */
-  for (int i=0; i<nb_cores; ++i)
+  for (auto & c : configs)
   {
-    c_disort_state_alloc(&ds[i]);
-    c_disort_out_alloc(&ds[i],&out[i]);
+    c.allocate();
   }
 
+  solvers.assign(nb_threads, disortpp::DisortFluxSolver<4>());
 }
 
 
-
-void DiscreteOrdinates::finaliseDISORT()
-{
-   const int nb_cores(omp_get_max_threads());
-
-  //free allocated memory
-  for (int i=0; i<nb_cores; ++i)
-  {
-    c_disort_out_free(&ds[i],&out[i]);
-    c_disort_state_free(&ds[i]);
-  }
-
-}
-
-
-
-void DiscreteOrdinates::runDISORT(
-  std::vector<double>& flux_up,
-  std::vector<double>& flux_down,
-  std::vector<double>& mean_intensity)
-{ 
-  const int thread(omp_get_thread_num());
-
-  if (c_planck_func2(ds[thread].wvnmlo, ds[thread].wvnmlo, ds[thread].bc.btemp) > 1.e-35)
-    ds[thread].flag.planck = TRUE;
-  else
-    ds[thread].flag.planck = FALSE;
-
-
-  c_disort(&ds[thread],&out[thread]);
-
-
-  for (int lc = 0; lc <= ds[thread].nlyr; lc++)
-  {
-    flux_down[ds[thread].nlyr - lc] = out[thread].rad[lc].rfldir + out[thread].rad[lc].rfldn;
-    flux_up[ds[thread].nlyr - lc] = out[thread].rad[lc].flup;
-    mean_intensity[ds[thread].nlyr - lc] = out[thread].rad[lc].uavg;
-  }
-
-}
-
-
-#undef PMOM
 }

@@ -32,7 +32,7 @@
 #include "sampled_data.h"
 
 
-namespace bear{
+namespace ngam{
 
 
 class OpacitySpecies {

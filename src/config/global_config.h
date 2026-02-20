@@ -26,7 +26,7 @@
 #include <string>
 
 
-namespace bear {
+namespace ngam {
 
 struct GlobalConfig {
   GlobalConfig() {};
@@ -77,7 +77,17 @@ struct GlobalConfig {
   std::string radiative_transfer_type = "disort";
   std::vector<std::string> radiative_transfer_parameters{"4"};
 
-  std::vector<std::string> opacity_species_symbol{"CIA-H2-H2", "CIA-H2-He", "H2O", "K", "Na", "CH4", "NH3", "H2S", "CO", "CO2"};
+  std::vector<std::string> opacity_species_symbol{
+    "CIA-H2-H2", 
+    "CIA-H2-He", 
+    "K", 
+    "Na", 
+    "H2O", 
+    "CH4", 
+    "NH3", 
+    "H2S", 
+    "CO", 
+    "CO2"};
   std::vector<std::string> opacity_species_folder{
     "CIA/H2-H2",
     "CIA/H2-He",

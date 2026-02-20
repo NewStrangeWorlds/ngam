@@ -18,40 +18,32 @@
 */
 
 
-#ifndef _fastchem_chemistry_h
-#define _fastchem_chemistry_h
+#ifndef _milne_solution_temperature_h
+#define _milne_solution_temperature_h
 
-
-#include "chemistry.h"
-
-#include "../../_deps/fastchem-src/fastchem_src/fastchem.h"
-#include "chem_species.h"
-
-#include <string>
+#include <iostream>
 #include <vector>
 
+#include "temperature.h"
 
 
 namespace ngam {
 
 
-class FastChemChemistry : public Chemistry{
+class TimeSteppingTemperature : public Temperature{
   public:
-    FastChemChemistry(
-      const std::string& fastchen_parameter_file);
-    virtual ~FastChemChemistry() {}
-    
-    virtual bool calcChemicalComposition(
+    TimeSteppingTemperature() {
+        nb_parameters = 2;
+        std::cout << "\n- Temperature profile: Milne's solution\n\n";
+      }
+    virtual ~TimeSteppingTemperature() {}
+    virtual bool calcProfile(
       const std::vector<double>& parameters,
-      const std::vector<double>& temperature,
+      const double surface_gravity,
       const std::vector<double>& pressure,
-      std::vector<std::vector<double>>& number_densities,
-      std::vector<double>& mean_molecular_weight);
+      std::vector<double>& temperature);
   private:
-    fastchem::FastChem<long double> fastchem;
-
-    std::vector<double> reference_element_abundances;
-    std::vector<size_t> fastchem_species_indices;
+    
 };
 
 

@@ -31,7 +31,7 @@
 #include "../chemistry/chem_species.h"
 
 
-namespace bear{
+namespace ngam{
 
 bool GasHm::calcContinuumAbsorption(const double temperature, const std::vector<double>& number_densities, std::vector<double>& absorption_coeff)
 {

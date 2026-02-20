@@ -32,7 +32,7 @@
 #include "../spectral_grid/spectral_grid.h"
 
 
-namespace bear {
+namespace ngam {
 
 
 class ShortCharacteristics : public RadiativeTransfer{
@@ -41,7 +41,7 @@ class ShortCharacteristics : public RadiativeTransfer{
     : RadiativeTransfer(spectral_grid_ptr) {};
     virtual ~ShortCharacteristics() {}
     
-    virtual void calcSpectrum(
+    virtual void calculate(
       const Atmosphere& atmosphere,
       const OpacityCalculation& opacity,
       RadiativeTransferOutput& output);
@@ -51,7 +51,7 @@ class ShortCharacteristics : public RadiativeTransfer{
     const std::vector<double> gauss_weights{0.5, 0.5};
     const size_t nb_angles = gauss_nodes.size();
 
-    double calcSpectrum(
+    double calculate(
       const std::vector<double>& absorption_coeff,
       const std::vector<double>& cloud_optical_depth,
       const std::vector<double>& temperature,

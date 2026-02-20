@@ -31,7 +31,7 @@
 #include <omp.h>
 #include <stdlib.h>
 
-namespace bear {
+namespace ngam {
 
 
 GlobalConfig::GlobalConfig(

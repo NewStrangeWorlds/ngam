@@ -25,7 +25,7 @@
 #include <string>
 #include "../chemistry/chem_species.h"
 
-namespace bear{ namespace aux{
+namespace ngam{ namespace aux{
 
 
 double planckFunctionWavenumber(const double temperature, const double wavenumber);

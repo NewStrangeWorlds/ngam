@@ -32,7 +32,7 @@
 #include "../additional/exceptions.h"
 
 
-namespace bear{
+namespace ngam{
 
 
 SpectralGrid::SpectralGrid(GlobalConfig* global_config)

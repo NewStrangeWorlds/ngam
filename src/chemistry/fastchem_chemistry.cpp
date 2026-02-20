@@ -33,7 +33,7 @@
 #include <iostream>
 
 
-namespace bear {
+namespace ngam {
 
 
 FastChemChemistry::FastChemChemistry(

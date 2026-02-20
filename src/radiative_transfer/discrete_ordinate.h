@@ -31,12 +31,12 @@
 #include "../spectral_grid/spectral_grid.h"
 
 
-extern "C" {
-  #include "cdisort_src/cdisort.h"
-}
+#include "../../_deps/disortpp-src/src/DisortFluxConfig.hpp"
+#include "../../_deps/disortpp-src/src/FluxResult.hpp"
+#include "../../_deps/disortpp-src/src/FluxSolver.hpp"
 
 
-namespace bear {
+namespace ngam {
 
 
 class DiscreteOrdinates : public RadiativeTransfer{
@@ -45,41 +45,54 @@ class DiscreteOrdinates : public RadiativeTransfer{
       SpectralGrid* spectral_grid_ptr,
       const size_t nb_streams,
       const size_t nb_grid_points);
-    virtual ~DiscreteOrdinates() {finaliseDISORT();}
+    virtual ~DiscreteOrdinates() {}
     
-    virtual void calcSpectrum(
+    virtual void calculate(
       const Atmosphere& atmosphere,
       const OpacityCalculation& opacity,
       RadiativeTransferOutput& output);
   private:
-    std::vector<disort_state> ds;
-    std::vector<disort_output> out;
+    size_t nb_streams = 0;
+    size_t nb_grid_points = 0;
+    size_t nb_layers = 0;
 
-    double calcSpectrum(
-      const std::vector<double> absorption_coeff,
-      const std::vector<double> scattering_coeff,
-      const std::vector<double>& cloud_optical_depth,
-      const std::vector<double>& vertical_grid, const size_t nu_index);
-    void calcRadiativeTransfer(
-      double incident_stellar_radiation, double zenith_angle,
-      std::vector<double>& flux_up,
-      std::vector<double>& flux_down,
-      std::vector<double>& mean_intensity);
+    int nb_threads = 0;
+
+    //std::vector<disort_state> ds;
+    //std::vector<disort_output> out;
+    std::vector<disortpp::DisortFluxConfig> configs;
+    std::vector<disortpp::DisortFluxSolver<4>> solvers;
+
+    void calculate(
+      const OpacityCalculation& opacity,
+      const std::vector<double>& vertical_grid,
+      const double surface_albedo,
+      const double incident_radiation,
+      const double zenith_angle,
+      const size_t nu_index,
+      const double max_temperature,
+      RadiativeTransferOutput& output);
+    void calcTotalTransportCoeff(
+      const OpacityCalculation& opacity,
+      const std::vector<double>& vertical_grid, 
+      const size_t nu_index,
+      std::vector<double>& optical_depth,
+      std::vector<double>& single_scattering_albedo,
+      std::vector<double>& asymmetry_parameter);
     void setTemperatureStructure(
       const std::vector<double>& temperature_structure,
       const double& surface_temperature);
-    void setOpticalDepth(
+    void setDISORTParam(
+      const int thread_id,
       const double wavenumber_input,
       const std::vector<double>& optical_depth,
-	    const std::vector<double>& single_scattering_albedo,
+      const std::vector<double>& single_scattering_albedo,
       const std::vector<double>& asymmetry_parameter,
-	    const double surface_albedo);
-    void initDISORT(unsigned int nb_streams, unsigned int nb_layers);
-    void finaliseDISORT();
-    void runDISORT(
-      std::vector<double>& flux_up,
-      std::vector<double>& flux_down,
-      std::vector<double>& mean_intensity);
+      const double incident_radiation,
+      const double zenith_angle,
+      const double surface_albedo);
+    void initDISORT();
+    void integrateQuantities(RadiativeTransferOutput& output);
 };
 
 

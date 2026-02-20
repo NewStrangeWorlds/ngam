@@ -30,7 +30,7 @@
 #include "sampled_data.h"
 
 
-namespace bear{
+namespace ngam{
 
 
 void SampledData::deleteSampledData()

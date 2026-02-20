@@ -24,7 +24,7 @@
 #include <cmath>
 
 
-namespace bear{ namespace aux{
+namespace ngam{ namespace aux{
 
 std::vector<chemical_species_id> findChemicalSpecies(
    const std::vector<std::string>& species)

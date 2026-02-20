@@ -31,7 +31,7 @@
 #include "../spectral_grid/spectral_grid.h"
 
 
-namespace bear{
+namespace ngam{
 
 
 class GlobalConfig;

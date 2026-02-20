@@ -28,7 +28,7 @@
 #include "../config/global_config.h"
 
 
-namespace bear{
+namespace ngam{
 
 
 class TransportCoefficients {

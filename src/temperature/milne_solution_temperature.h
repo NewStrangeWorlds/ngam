@@ -27,7 +27,7 @@
 #include "temperature.h"
 
 
-namespace bear {
+namespace ngam {
 
 
 class MilneTemperature : public Temperature{

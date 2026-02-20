@@ -24,7 +24,7 @@
 #include <vector>
 #include <stdexcept>
 
-namespace bear{
+namespace ngam{
 namespace aux{
 
 
