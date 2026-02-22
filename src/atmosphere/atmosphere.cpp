@@ -47,20 +47,22 @@ Atmosphere::Atmosphere(
   altitude.assign(nb_grid_points, 0.0);
   scale_height.assign(nb_grid_points, 0.0);
   mass_density.assign(nb_grid_points, 0.0);
-  
+  mean_molecular_weight.assign(nb_grid_points, 0.0);
+
   number_densities.assign(
-    nb_grid_points, 
+    nb_grid_points,
     std::vector<double>(constants::species_data.size(), 0.0));
+
+  convective.assign(nb_grid_points, 0);
 }
 
 
 
-void Atmosphere::calcMassDensity(
-  const std::vector<double>& mean_molecular_weights)
+void Atmosphere::calcMassDensity()
 {
   for (size_t i=0; i<nb_grid_points; ++i)
-    mass_density[i] = mean_molecular_weights[i] * pressure[i]*1e6 
-      / (constants::gas_constant  * temperature[i]);
+    mass_density[i] = mean_molecular_weight[i] * pressure[i]*1e6
+      / (constants::gas_constant * temperature[i]);
 }
 
 
@@ -68,28 +70,22 @@ void Atmosphere::calcMassDensity(
 void Atmosphere::calcAtmosphereStructure(
   const double surface_gravity,
   const double bottom_radius,
-  const bool use_variable_gravity,
-  const std::vector<double>& mean_molecular_weights)
+  const bool use_variable_gravity)
 {
-  calcMassDensity(mean_molecular_weights);
+  calcMassDensity();
 
   if (use_variable_gravity)
-    calcAltitudeVariableGravity(
-      surface_gravity,
-      bottom_radius,
-      mean_molecular_weights);
+    calcAltitudeVariableGravity(surface_gravity, bottom_radius);
   else
-    calcAltitude(surface_gravity, mean_molecular_weights);
+    calcAltitude(surface_gravity);
 
-  calcScaleHeight(surface_gravity, mean_molecular_weights);
+  calcScaleHeight(surface_gravity);
 }
 
 
 
 //determine the vertical grid via hydrostatic equilibrium
-void Atmosphere::calcAltitude(
-  const double surface_gravity, 
-  const std::vector<double>& mean_molecular_weights)
+void Atmosphere::calcAltitude(const double surface_gravity)
 {
   altitude.assign(nb_grid_points, 0.0);
 
@@ -108,8 +104,7 @@ void Atmosphere::calcAltitude(
 //determine the vertical grid via hydrostatic equilibrium
 void Atmosphere::calcAltitudeVariableGravity(
   const double surface_gravity_bottom,
-  const double bottom_radius,
-  const std::vector<double>& mean_molecular_weights)
+  const double bottom_radius)
 { 
   altitude.assign(nb_grid_points, 0.0);
   
@@ -128,13 +123,12 @@ void Atmosphere::calcAltitudeVariableGravity(
 }
 
 
-void Atmosphere::calcScaleHeight(
-  const double surface_gravity, const std::vector<double>& mean_molecular_weights)
+void Atmosphere::calcScaleHeight(const double surface_gravity)
 {
   scale_height.assign(nb_grid_points, 0.0);
 
   for (size_t i=0; i<nb_grid_points; ++i)
-    scale_height[i] = constants::gas_constant * temperature[i] / (mean_molecular_weights[i] * surface_gravity);
+    scale_height[i] = constants::gas_constant * temperature[i] / (mean_molecular_weight[i] * surface_gravity);
 }
 
 

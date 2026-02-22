@@ -32,6 +32,7 @@
 #include "../chemistry/chemistry.h"
 #include "../temperature/temperature.h"
 #include "../radiative_transfer/radiative_transfer.h"
+#include "../convection/convection.h"
 
 
 namespace ngam{
@@ -50,7 +51,7 @@ class GenericObject {
       std::vector<std::unique_ptr<Chemistry>> chemistry_,
       std::unique_ptr<Temperature> temperature_profile_,
       std::unique_ptr<RadiativeTransfer> radiative_transfer_)
-      : radiation_field(spectral_grid_->nbSpectralPoints(), nb_grid_points),
+      : radiation_field(spectral_grid_, nb_grid_points),
         spectral_grid(spectral_grid_),
         atmosphere(nb_grid_points, atmos_boundary_pressures),
         opacity(
@@ -80,6 +81,7 @@ class GenericObject {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     std::unique_ptr<Temperature> temperature_profile;
     std::unique_ptr<RadiativeTransfer> radiative_transfer;
+    std::unique_ptr<Convection> convection;
 };
 
 

@@ -18,13 +18,14 @@
 */
 
 
-#ifndef _milne_solution_temperature_h
-#define _milne_solution_temperature_h
+#ifndef _time_stepping_temperature_h
+#define _time_stepping_temperature_h
 
 #include <iostream>
 #include <vector>
 
 #include "temperature.h"
+#include "../atmosphere/atmosphere.h"
 
 
 namespace ngam {
@@ -33,15 +34,15 @@ namespace ngam {
 class TimeSteppingTemperature : public Temperature{
   public:
     TimeSteppingTemperature() {
-        nb_parameters = 2;
-        std::cout << "\n- Temperature profile: Milne's solution\n\n";
+        nb_parameters = 3;
+        std::cout << "\n- Temperature profile: time stepping\n\n";
       }
     virtual ~TimeSteppingTemperature() {}
-    virtual bool calcProfile(
+    virtual void calcProfile(
       const std::vector<double>& parameters,
       const double surface_gravity,
-      const std::vector<double>& pressure,
-      std::vector<double>& temperature);
+      Atmosphere& atmosphere,
+      const RadiativeTransferOutput& radiation_field);
   private:
     
 };

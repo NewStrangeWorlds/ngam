@@ -93,7 +93,6 @@ class DiscreteOrdinates : public RadiativeTransfer{
       const double zenith_angle,
       const double surface_albedo);
     void initDISORT();
-    void integrateQuantities(RadiativeTransferOutput& output);
 };
 
 

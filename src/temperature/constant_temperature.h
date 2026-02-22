@@ -22,10 +22,9 @@
 #define _constant_temperature_h
 
 #include "temperature.h"
-
+#include "../atmosphere/atmosphere.h"
 
 #include <vector>
-
 
 
 namespace ngam {
@@ -35,14 +34,12 @@ class ConstantTemperature : public Temperature{
   public:
     ConstantTemperature() {nb_parameters = 1;}
     virtual ~ConstantTemperature() {}
-    virtual bool calcProfile(
+    virtual void calcProfile(
       const std::vector<double>& parameters,
       const double surface_gravity,
-      const std::vector<double>& pressure,
-      std::vector<double>& temperature) {
-        temperature.assign(pressure.size(), parameters[0]);
-        return false;
-      }
+      Atmosphere& atmosphere,
+      const RadiativeTransferOutput& radiation_field) {
+        atmosphere.temperature.assign(atmosphere.pressure.size(), parameters[0]);}
 };
 
 

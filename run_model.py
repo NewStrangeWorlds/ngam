@@ -3,6 +3,7 @@ import numpy as np
 
 sys.path.insert(0, "build")
 import pyngam
+from ngam_io import save_model, load_temperature
 
 
 # --- Model configuration ---
@@ -25,6 +26,13 @@ opacity_species = [
 species_symbols = [s[0] for s in opacity_species]
 species_folders = [s[1] for s in opacity_species]
 
+model_config = dict(
+    effective_temperature=1000.0,
+    surface_gravity=10**4.5,
+    metallicity=1.0,
+    bottom_radius=7.1492e9,
+)
+
 
 # --- Build the model ---
 
@@ -46,9 +54,18 @@ model = pyngam.BrownDwarf(
     temperature_params=[],
     rt_type="disort",
     rt_params=["4"],
-    surface_gravity=100.0,
-    bottom_radius=7.1492e9,
-    use_variable_gravity=False)
+    use_variable_gravity=False,
+    temperature_parameters=[1e-4, 1000.0],  # kappa_ross, T_eff (for Milne init)
+    chemistry_parameters=[1.0, 0.5],        # metallicity, C/O
+    max_iterations=2000,
+    convergence_threshold=1e-5,
+    iteration_gamma=0.5,
+    **model_config)
+
+
+# --- Optional: restart from a previous run ---
+# To restart from a saved file, uncomment the following:
+model.set_temperature(load_temperature("output.nc"))
 
 
 # --- Run ---
@@ -76,9 +93,7 @@ print(f"Atmosphere: {atm.nb_grid_points} levels, "
 print(f"\nFlux at top: {flux_total[0]:.4e} erg/cm2/s")
 print(f"Flux at bottom: {flux_total[-1]:.4e} erg/cm2/s")
 
-# Save spectrum
-np.savetxt("spectrum.dat",
-    np.column_stack([wavelengths, spectrum]),
-    header="wavelength [um]    flux [erg/cm2/s/cm-1]")
 
-print(f"\nSpectrum saved to spectrum.dat ({len(spectrum)} points)")
+# --- Save ---
+
+save_model("output.nc", model, grid, config=model_config)

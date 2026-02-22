@@ -35,7 +35,7 @@ include(FetchContent)
 FetchContent_Declare(
   disortpp
   GIT_REPOSITORY https://github.com/NewStrangeWorlds/DisORT
-  GIT_TAG        v1.0.3
+  GIT_TAG        v1.1
   GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(disortpp)
@@ -64,6 +64,7 @@ endif()
 # Library sources (everything except main.cpp)
 set(LIB_SRC
   src/additional/aux_functions.cpp
+  src/additional/thermodynamic_data.cpp
   src/config/global_config.cpp
   src/spectral_grid/convert.cpp
   src/spectral_grid/spectral_grid.cpp
@@ -80,6 +81,8 @@ set(LIB_SRC
   src/chemistry/isoprofile_chemistry.cpp
   src/chemistry/fastchem_chemistry.cpp
   src/temperature/milne_solution_temperature.cpp
+  src/temperature/time_stepping_temperature.cpp
+  src/convection/dry_adiabatic.cpp
 )
 
 # Static library

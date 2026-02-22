@@ -46,26 +46,22 @@ class Atmosphere {
     std::vector<double> altitude;
     std::vector<double> scale_height;
     std::vector<double> mass_density;
+    std::vector<double> mean_molecular_weight;
     std::vector< std::vector<double> > number_densities;
+    std::vector<int> convective;
 
     void calcAtmosphereStructure(
       const double surface_gravity,
       const double bottom_radius,
-      const bool use_variable_gravity,
-      const std::vector<double>& mean_molecular_weights);
+      const bool use_variable_gravity);
 
   private:
     void createPressureGrid(const std::vector<double>& domain_boundaries);
-    void calcMassDensity(
-      const std::vector<double>& mean_molecular_weights);
-    void calcAltitude(
-      const double g, const std::vector<double>& mean_molecular_weights);
+    void calcMassDensity();
+    void calcAltitude(const double g);
     void calcAltitudeVariableGravity(
-      const double g, 
-      const double bottom_radius,
-      const std::vector<double>& mean_molecular_weights);
-    void calcScaleHeight(
-      const double g, const std::vector<double>& mean_molecular_weights);
+      const double g, const double bottom_radius);
+    void calcScaleHeight(const double g);
 };
 
 

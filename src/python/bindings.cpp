@@ -3,6 +3,7 @@
 
 #include "../spectral_grid/spectral_grid.h"
 #include "../atmosphere/atmosphere.h"
+#include "../chemistry/chem_species.h"
 #include "../chemistry/chemistry.h"
 #include "../chemistry/select_chemistry.h"
 #include "../temperature/temperature.h"
@@ -32,8 +33,16 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
     const std::string& rt_type,
     const std::vector<std::string>& rt_params,
     double surface_gravity,
+    double effective_temperature,
+    double metallicity,
     double bottom_radius,
-    bool use_variable_gravity)
+    bool use_variable_gravity,
+    const std::vector<double>& temperature_parameters,
+    const std::vector<double>& chemistry_parameters,
+    size_t max_iterations,
+    double convergence_threshold,
+    double iteration_gamma,
+    bool use_convective_adjustment)
 {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     for (auto& [type, params] : chemistry_configs)
@@ -55,13 +64,34 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
         std::move(temperature),
         std::move(rt),
         surface_gravity,
+        effective_temperature,
+        metallicity,
         bottom_radius,
-        use_variable_gravity);
+        use_variable_gravity,
+        temperature_parameters,
+        chemistry_parameters,
+        max_iterations,
+        convergence_threshold,
+        iteration_gamma,
+        use_convective_adjustment);
+}
+
+
+static std::vector<std::string> get_species_symbols()
+{
+    std::vector<std::string> symbols;
+    symbols.reserve(constants::species_data.size());
+    for (auto& s : constants::species_data)
+        symbols.push_back(s.symbol);
+    return symbols;
 }
 
 
 PYBIND11_MODULE(pyngam, m) {
     m.doc() = "ngam — atmospheric modeling framework";
+
+    m.def("species_symbols", &get_species_symbols,
+        "Return the list of all chemical species symbols (indexed by species ID)");
 
     // ---- SpectralGrid ----
     py::class_<SpectralGrid>(m, "SpectralGrid")
@@ -104,7 +134,9 @@ PYBIND11_MODULE(pyngam, m) {
         .def_readonly("altitude", &Atmosphere::altitude)
         .def_readonly("scale_height", &Atmosphere::scale_height)
         .def_readonly("mass_density", &Atmosphere::mass_density)
-        .def_readonly("number_densities", &Atmosphere::number_densities);
+        .def_readonly("mean_molecular_weight", &Atmosphere::mean_molecular_weight)
+        .def_readonly("number_densities", &Atmosphere::number_densities)
+        .def_readonly("convective", &Atmosphere::convective);
 
     // ---- RadiativeTransferOutput ----
     py::class_<RadiativeTransferOutput>(m, "RadiativeTransferOutput")
@@ -116,7 +148,8 @@ PYBIND11_MODULE(pyngam, m) {
         .def_readonly("flux", &RadiativeTransferOutput::flux)
         .def_readonly("flux_up", &RadiativeTransferOutput::flux_up)
         .def_readonly("flux_down", &RadiativeTransferOutput::flux_down)
-        .def_readonly("mean_intensity", &RadiativeTransferOutput::mean_intensity);
+        .def_readonly("mean_intensity", &RadiativeTransferOutput::mean_intensity)
+        .def_readonly("flux_divergence", &RadiativeTransferOutput::flux_divergence);
 
     // ---- BrownDwarf ----
     py::class_<BrownDwarf>(m, "BrownDwarf")
@@ -134,10 +167,21 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("rt_type"),
             py::arg("rt_params"),
             py::arg("surface_gravity"),
+            py::arg("effective_temperature"),
+            py::arg("metallicity"),
             py::arg("bottom_radius"),
             py::arg("use_variable_gravity"),
+            py::arg("temperature_parameters"),
+            py::arg("chemistry_parameters"),
+            py::arg("max_iterations") = 100,
+            py::arg("convergence_threshold") = 1e-4,
+            py::arg("iteration_gamma") = 0.5,
+            py::arg("use_convective_adjustment") = true,
             py::keep_alive<1, 2>())
         .def("compute", &BrownDwarf::computeAtmosphericStructure)
+        .def("set_temperature", &BrownDwarf::setTemperature,
+            py::arg("temperature"),
+            "Set initial temperature profile from an external array (skips analytic init)")
         .def_readonly("radiation_field", &BrownDwarf::radiation_field)
         .def_property_readonly("atmosphere", &BrownDwarf::getAtmosphere);
 }

@@ -32,33 +32,25 @@ namespace ngam {
 
 
 //calculate the temperature based on the analytical Milne solution
-bool MilneTemperature::calcProfile(
-  const std::vector<double>& parameters, 
+void MilneTemperature::calcProfile(
+  const std::vector<double>& parameters,
   const double surface_gravity,
-  const std::vector<double>& pressure, 
-  std::vector<double>& temperature)
+  Atmosphere& atmosphere,
+  const RadiativeTransferOutput& radiation_field)
 {
-  temperature.assign(pressure.size(), 0);
+  atmosphere.temperature.assign(atmosphere.pressure.size(), 0);
 
   const double kappa_ross = parameters[0];
   const double t_eff = parameters[1];
 
-  for (size_t i=0; i<temperature.size(); ++i)
+  for (size_t i=0; i<atmosphere.temperature.size(); ++i)
   {
-    const double tau_ross = kappa_ross * pressure[i] * 1e6 / surface_gravity;
+    const double tau_ross = kappa_ross * atmosphere.pressure[i] * 1e6 / surface_gravity;
     
-    temperature[i] = 3.0/4.0 * std::pow(t_eff, 4) * (hopfFunction(tau_ross) + tau_ross);
-    temperature[i] = std::pow(temperature[i], 0.25);
+    atmosphere.temperature[i] = 3.0/4.0 * std::pow(t_eff, 4) * (hopfFunction(tau_ross) + tau_ross);
+    atmosphere.temperature[i] = std::pow(atmosphere.temperature[i], 0.25);
   }
 
-  //neglect models with too low temperatures
-  bool neglect_model = false;
-  
-  for (auto & i : temperature)
-    if (i < 50) {i = 50; neglect_model = true;}
-
-
-  return neglect_model;
 }
 
 

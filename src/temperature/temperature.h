@@ -24,32 +24,35 @@
 #include <vector>
 #include <cstddef>
 
+#include "../atmosphere/atmosphere.h"
 
 namespace ngam {
+
+struct RadiativeTransferOutput;
 
 
 class Temperature{
   public:
     virtual ~Temperature() {}
-    virtual bool calcProfile(
+    virtual void calcProfile(
       const std::vector<double>& parameters,
       const double surface_gravity,
-      const std::vector<double>& pressure,
-      std::vector<double>& temperature_profile) = 0;
+      Atmosphere& atmosphere,
+      const RadiativeTransferOutput& radiation_field) = 0;
     size_t nbParameters() {return nb_parameters;}
   protected:
     size_t nb_parameters {};
     
-    bool checkProfile(std::vector<double>& temperature) {
-      for (auto & i : temperature)
-        if (i < 50)
-        {
-          i = 50;
-          return true;
-        }
+    // bool checkProfile(std::vector<double>& temperature) {
+    //   for (auto & i : temperature)
+    //     if (i < 50)
+    //     {
+    //       i = 50;
+    //       return true;
+    //     }
       
-      return false;
-    };
+    //   return false;
+    // };
 };
 
 

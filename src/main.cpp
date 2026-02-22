@@ -43,6 +43,14 @@ int main(int argc, char *argv[])
     config.nb_grid_points,
     &spectral_grid);
 
+  // fundamental model parameters
+  double effective_temperature = 3000.0;
+  double metallicity = 0.5;
+
+  // sub-model parameters
+  std::vector<double> temperature_parameters{1e-4, effective_temperature};  // kappa_ross, T_eff (for Milne init)
+  std::vector<double> chemistry_parameters{metallicity, 0.5};              // metallicity, C/O
+
   // assemble the model
   ngam::BrownDwarf brown_dwarf(
     &spectral_grid,
@@ -56,10 +64,12 @@ int main(int argc, char *argv[])
     std::move(temperature_profile),
     std::move(radiative_transfer),
     config.surface_gravity,
+    effective_temperature,
+    metallicity,
     config.bottom_radius,
-    config.use_variable_gravity);
-
-  std::cout << "Hello, World!" << std::endl;
+    config.use_variable_gravity,
+    temperature_parameters,
+    chemistry_parameters);
 
   brown_dwarf.computeAtmosphericStructure();
 

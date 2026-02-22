@@ -90,30 +90,7 @@ void DiscreteOrdinates::calculate(
       max_temperature,
       output);
 
-  integrateQuantities(output);
-}
-
-
-
-void DiscreteOrdinates::integrateQuantities(RadiativeTransferOutput& output)
-{
-  #pragma omp parallel for
-  for (size_t i=0; i<nb_grid_points; ++i)
-  {
-    output.flux_up_total[i] = aux::quadratureTrapezoidal(
-      spectral_grid->wavenumber_list,
-      output.flux_up[i]);
-    
-    output.flux_down_total[i] = aux::quadratureTrapezoidal(
-      spectral_grid->wavenumber_list,
-      output.flux_down[i]);
-
-    output.flux_total[i] = output.flux_up_total[i] - output.flux_down_total[i];
-    
-    output.mean_intensity_total[i] = aux::quadratureTrapezoidal(
-      spectral_grid->wavenumber_list,
-      output.mean_intensity[i]);
-  }
+  output.integrateQuantities();
 }
 
 
@@ -210,17 +187,22 @@ void DiscreteOrdinates::calculate(
     configs[thread_id].use_thermal_emission = false;
   
   auto results = solvers[thread_id](configs[thread_id]);
-  
+
+  // DisORT returns fluxes in W/m²; convert to CGS (erg/cm²/s): 1 W/m² = 1e3 erg/cm²/s
+  constexpr double si_to_cgs = 1e3;
+
   for (size_t j=0; j<nb_grid_points; ++j)
   {
-    output.flux_up[j][nu_index]  = results.flux_up[nb_grid_points - j - 1];
-    output.flux_down[j][nu_index] = results.flux_down[nb_grid_points - j - 1] 
-      + results.flux_direct_beam[nb_grid_points - j - 1];
-    
+    const size_t j_rev = nb_grid_points - j - 1;
+
+    output.flux_up[j][nu_index]   = results.flux_up[j_rev] * si_to_cgs;
+    output.flux_down[j][nu_index] = (results.flux_down[j_rev]
+      + results.flux_direct_beam[j_rev]) * si_to_cgs;
+
     output.flux[j][nu_index] = output.flux_up[j][nu_index] - output.flux_down[j][nu_index];
-    output.mean_intensity[j][nu_index] = results.mean_intensity[nb_grid_points - j - 1];
+    output.mean_intensity[j][nu_index] = results.mean_intensity[j_rev] * si_to_cgs;
   }
-  
+
   output.spectrum[nu_index] = output.flux_up.back()[nu_index];
 }
 
@@ -304,6 +286,7 @@ void DiscreteOrdinates::initDISORT()
   disortpp::DisortFluxConfig config(nb_grid_points-1, nb_streams, nb_streams);
 
   config.use_thermal_emission = true;
+  config.use_diffusion_lower_bc = true;
 
   configs.assign(nb_threads, config);
 

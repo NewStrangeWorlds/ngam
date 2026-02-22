@@ -22,13 +22,16 @@
 #define BROWN_DWARF_H
 
 
-#include <iostream>
-#include <fstream>
 #include <vector>
+#include <algorithm>
+#include <cmath>
+#include <iostream>
 #include <iomanip>
 
 #include "generic_object.h"
-#include "../chemistry/chem_species.h"
+#include "../additional/physical_const.h"
+#include "../temperature/time_stepping_temperature.h"
+#include "../convection/dry_adiabatic.h"
 
 
 namespace ngam{
@@ -47,8 +50,16 @@ class BrownDwarf : public GenericObject {
       std::unique_ptr<Temperature> temperature_profile,
       std::unique_ptr<RadiativeTransfer> radiative_transfer,
       double surface_gravity_,
+      double effective_temperature_,
+      double metallicity_,
       double bottom_radius_,
-      bool use_variable_gravity_)
+      bool use_variable_gravity_,
+      const std::vector<double>& temperature_parameters_,
+      const std::vector<double>& chemistry_parameters_,
+      size_t max_iterations_ = 100,
+      double convergence_threshold_ = 1e-4,
+      double iteration_gamma_ = 0.5,
+      bool use_convective_adjustment_ = true)
       : GenericObject(
           spectral_grid,
           nb_grid_points,
@@ -61,81 +72,179 @@ class BrownDwarf : public GenericObject {
           std::move(temperature_profile),
           std::move(radiative_transfer)),
         surface_gravity(surface_gravity_),
+        effective_temperature(effective_temperature_),
+        metallicity(metallicity_),
+        target_flux(constants::stefan_boltzmann * std::pow(effective_temperature_, 4)),
         bottom_radius(bottom_radius_),
-        use_variable_gravity(use_variable_gravity_)
-    {}
+        use_variable_gravity(use_variable_gravity_),
+        temperature_parameters(temperature_parameters_),
+        chemistry_parameters(chemistry_parameters_),
+        max_iterations(max_iterations_),
+        convergence_threshold(convergence_threshold_),
+        iteration_gamma(iteration_gamma_)
+    {
+      if (use_convective_adjustment_)
+        convection = std::make_unique<DryAdiabaticAdjustment>();
+    }
     virtual ~BrownDwarf() {}
+
+    void setTemperature(const std::vector<double>& temperature)
+    {
+      atmosphere.temperature = temperature;
+      skip_init = true;
+    }
 
     bool computeAtmosphericStructure() override
     {
-      std::cout << "Computing brown dwarf atmospheric structure...\n";
-
-
-      std::vector<double> chem_parameters{0.5, 0.5};
-      std::vector<double> temp_parameters{1e-4, 3000.0};
-
-      //temperature profile
-      temperature_profile->calcProfile(
-        temp_parameters,
-        surface_gravity,
-        atmosphere.pressure,
-        atmosphere.temperature);
-
-      //chemical composition
-      std::vector<double> mean_molecular_weights(atmosphere.nb_grid_points, 0.0);
-
-      atmosphere.number_densities.assign(
-        atmosphere.nb_grid_points,
-        std::vector<double>(constants::species_data.size(), 0.0));
-
-      size_t nb_chem_param = 0;
-
-      for (auto & chem : chemistry)
+      if (!skip_init)
       {
-        std::vector<double> params(
-          chem_parameters.begin() + nb_chem_param,
-          chem_parameters.begin() + nb_chem_param + chem->nbParameters());
+        // --- Initialization: analytic temperature profile ---
+        auto init_params = temperature_parameters;
+        if (init_params.size() < 3)
+          init_params.resize(3);
+        init_params[2] = target_flux;
 
-        nb_chem_param += chem->nbParameters();
-
-        chem->calcChemicalComposition(
-          params, atmosphere.temperature, atmosphere.pressure,
-          atmosphere.number_densities, mean_molecular_weights);
+        temperature_profile->calcProfile(
+          init_params, surface_gravity, atmosphere, radiation_field);
+      }
+      else
+      {
+        std::cout << "\n  Using externally provided temperature profile for initialization.\n";
+        skip_init = false;
       }
 
-      //atmospheric structure from composition
-      atmosphere.calcAtmosphereStructure(
-        surface_gravity,
-        bottom_radius,
-        use_variable_gravity,
-        mean_molecular_weights);
+      // time-stepping correction profile (dynamic mode: dt <= 0)
+      TimeSteppingTemperature temp_correction;
+      std::vector<double> correction_params = {-1.0, iteration_gamma, target_flux};
 
-      opacity.calculate();
+      std::cout << "\n--- Starting iteration loop ---\n"
+                << "  max iterations:        " << max_iterations << "\n"
+                << "  convergence threshold: " << convergence_threshold << "\n"
+                << "  target flux:           " << std::scientific << std::setprecision(4)
+                << target_flux << " erg/cm2/s\n\n" << std::fixed;
 
-      radiative_transfer->calculate(
-        atmosphere,
-        opacity,
-        radiation_field);
+      std::cout << "  " << std::setw(5) << "iter"
+                << "  " << std::setw(12) << "max|dT/T|"
+                << "  " << std::setw(9) << "max|dT|"
+                << "  " << std::setw(5) << "@ lv"
+                << "  " << std::setw(12) << "dF/F(TOA)"
+                << "  " << std::setw(12) << "flux_divergence"
+                << "  " << std::setw(8) << "T_bot"
+                << "  " << std::setw(8) << "T_top"
+                << "  " << std::setw(12) << "N_conv"
+                << "\n";
 
-      for (size_t i=0; i<radiation_field.flux_total.size(); ++i)
-        std::cout << "Level " << i << ": Flux = " << radiation_field.flux_total[i] << " erg/cm2/s\n";
+      for (size_t iter = 0; iter < max_iterations; ++iter)
+      {
+        std::vector<double> old_temperature = atmosphere.temperature;
 
-      std::string file_name = "spectrum.dat";
+        // 1. Chemistry
+        calcChemistry();
 
-      std::fstream file(file_name.c_str(), std::ios::out);
+        // 2. Atmosphere structure (density, altitude, scale height)
+        atmosphere.calcAtmosphereStructure(
+          surface_gravity, bottom_radius, use_variable_gravity);
 
-      for (size_t i=0; i<spectral_grid->nb_spectral_points; ++i)
-        file << std::setprecision(10) << std::scientific << spectral_grid->wavelength_list[i] << " " << radiation_field.spectrum[i] << "\n";
+        // 3. Opacities
+        opacity.calculate();
 
-      file.close();
+        // 4. Radiative transfer
+        radiative_transfer->calculate(atmosphere, opacity, radiation_field);
 
-      return true;
+        // 5. Flux divergence
+        radiation_field.calcFluxDivergence(atmosphere.pressure);
+
+        // 6. Temperature correction
+        temp_correction.calcProfile(
+          correction_params, surface_gravity, atmosphere, radiation_field);
+
+        // 7. Convective adjustment
+        if (convection)
+          convection->adjust(atmosphere);
+
+        // 8. Convergence check: max |dT/T| and max |dT|
+        double max_change = 0;
+        double max_abs_dT = 0;
+        double max_dT = 0;
+        size_t max_abs_dT_level = 0;
+
+        for (size_t i = 0; i < atmosphere.temperature.size(); ++i)
+        {
+          double rel_change = std::abs(
+            (atmosphere.temperature[i] - old_temperature[i]) / old_temperature[i]);
+          max_change = std::max(max_change, rel_change);
+
+          double abs_dT = std::abs(atmosphere.temperature[i] - old_temperature[i]);
+          if (abs_dT > max_abs_dT)
+          {
+            max_abs_dT = abs_dT;
+            max_dT = atmosphere.temperature[i] - old_temperature[i];
+            max_abs_dT_level = i;
+          }
+        }
+
+        const double flux_error = (radiation_field.flux_total.back() - target_flux) / target_flux;
+        const int n_conv = std::count(
+          atmosphere.convective.begin(), atmosphere.convective.end(), 1);
+
+        std::cout << "  " << std::setw(5) << iter + 1
+                  << "  " << std::setw(12) << std::scientific << std::setprecision(4) << max_change
+                  << "  " << std::setw(9) << std::fixed << std::setprecision(3) << max_dT
+                  << "  " << std::setw(5) << max_abs_dT_level
+                  << "  " << std::setw(12) << std::scientific << std::setprecision(4) << flux_error
+                  << "  " << std::setw(12) << std::scientific << std::setprecision(4) << radiation_field.flux_divergence[max_abs_dT_level]
+                  << "  " << std::setw(8) << std::fixed << std::setprecision(0) << atmosphere.temperature[0]
+                  << "  " << std::setw(8) << atmosphere.temperature.back()
+                  << "  " << std::setw(6) << n_conv
+                  << "\n";
+
+        if (max_change < convergence_threshold)
+        {
+          std::cout << "\n  Converged after " << iter + 1 << " iterations.\n" << std::endl;
+          return true;
+        }
+      }
+
+      std::cout << "\n  Warning: did not converge after "
+                << max_iterations << " iterations.\n" << std::endl;
+      return false;
     }
 
   private:
     double surface_gravity;
+    double effective_temperature;
+    double metallicity;
+    double target_flux;
     double bottom_radius;
     bool use_variable_gravity;
+
+    std::vector<double> temperature_parameters;
+    std::vector<double> chemistry_parameters;
+
+    size_t max_iterations;
+    double convergence_threshold;
+    double iteration_gamma;
+    bool skip_init = false;
+
+    void calcChemistry()
+    {
+      size_t param_offset = 0;
+
+      for (auto& chem : chemistry)
+      {
+        std::vector<double> params(
+          chemistry_parameters.begin() + param_offset,
+          chemistry_parameters.begin() + param_offset + chem->nbParameters());
+        param_offset += chem->nbParameters();
+
+        chem->calcChemicalComposition(
+          params,
+          atmosphere.temperature,
+          atmosphere.pressure,
+          atmosphere.number_densities,
+          atmosphere.mean_molecular_weight);
+      }
+    }
 };
 
 } // namespace ngam

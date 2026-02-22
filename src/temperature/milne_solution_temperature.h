@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "temperature.h"
+#include "../atmosphere/atmosphere.h"
 
 
 namespace ngam {
@@ -37,11 +38,11 @@ class MilneTemperature : public Temperature{
         std::cout << "\n- Temperature profile: Milne's solution\n\n";
       }
     virtual ~MilneTemperature() {}
-    virtual bool calcProfile(
+    virtual void calcProfile(
       const std::vector<double>& parameters,
       const double surface_gravity,
-      const std::vector<double>& pressure,
-      std::vector<double>& temperature);
+      Atmosphere& atmosphere,
+      const RadiativeTransferOutput& radiation_field);
   private:
     //fit coefficients for the Hopf function
     const std::vector<double> fit_p {0.6162, -0.3799, 2.395, -2.041, 2.578};
