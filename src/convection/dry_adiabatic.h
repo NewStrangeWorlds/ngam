@@ -12,15 +12,17 @@ namespace ngam {
 
 class DryAdiabaticAdjustment : public Convection {
   public:
-    DryAdiabaticAdjustment(size_t max_sweeps_ = 10)
-      : max_sweeps(max_sweeps_)
+    DryAdiabaticAdjustment(size_t max_sweeps_ = 10, double min_pressure_ = 1e-4)
+      : max_sweeps(max_sweeps_), min_pressure(min_pressure_)
     {
-      std::cout << "\n- Convection: dry adiabatic adjustment\n\n";
+      std::cout << "\n- Convection: dry adiabatic adjustment"
+                << " (min pressure: " << min_pressure << " bar)\n\n";
     }
     virtual ~DryAdiabaticAdjustment() {}
     void adjust(Atmosphere& atmosphere) override;
   private:
     size_t max_sweeps;
+    double min_pressure;
 };
 
 

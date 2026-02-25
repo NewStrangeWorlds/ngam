@@ -3,7 +3,7 @@ import numpy as np
 
 sys.path.insert(0, "build")
 import pyngam
-from ngam_io import save_model, load_temperature
+from ngam_io import save_model, load_model_data
 
 
 # --- Model configuration ---
@@ -30,6 +30,7 @@ model_config = dict(
     effective_temperature=1000.0,
     surface_gravity=10**4.5,
     metallicity=1.0,
+    c_to_o_ratio=0.5,
     bottom_radius=7.1492e9,
 )
 
@@ -50,22 +51,35 @@ model = pyngam.BrownDwarf(
     opacity_species_folder=species_folders,
     use_clouds=False,
     chemistry=[("eq", ["fastchem_parameters.dat"])],
-    temperature_type="milne",
-    temperature_params=[],
     rt_type="disort",
     rt_params=["4"],
     use_variable_gravity=False,
-    temperature_parameters=[1e-4, 1000.0],  # kappa_ross, T_eff (for Milne init)
-    chemistry_parameters=[1.0, 0.5],        # metallicity, C/O
-    max_iterations=2000,
+    max_iterations=5000,
     convergence_threshold=1e-5,
     iteration_gamma=0.5,
+    lre_fraction=0.5,
+    ng_interval=0,
+    max_change_per_iteration=0.1,
     **model_config)
 
 
-# --- Optional: restart from a previous run ---
-# To restart from a saved file, uncomment the following:
-model.set_temperature(load_temperature("output.nc"))
+# --- Initialize ---
+
+# Option 1: Initialize from analytic profile + chemistry
+model.initialize(
+    temperature_type="milne",
+    temperature_config=[],
+    temperature_parameters=[1e-2, 1000.0],  # kappa_ross, T_eff (for Milne init)
+    init_chemistry=[("eq", ["fastchem_parameters.dat"])],
+    init_chemistry_parameters=[model_config["metallicity"], model_config["c_to_o_ratio"]])
+
+# Option 2: Restart from a saved file
+# ds = load_model_data("output.nc")
+# model.initialize_from_arrays(
+#     temperature=ds["temperature"].values.tolist(),
+#     number_densities=ds["number_densities"].values.tolist(),
+#     mean_molecular_weight=ds["mean_molecular_weight"].values.tolist())
+# ds.close()
 
 
 # --- Run ---

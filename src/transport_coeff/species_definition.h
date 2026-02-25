@@ -25,6 +25,7 @@
 
 #include <vector>
 #include <iostream>
+#include <array>
 
 #include "../chemistry/chem_species.h"
 #include "../additional/physical_const.h"
@@ -273,6 +274,96 @@ class GasH2ORayleigh : public OpacitySpecies {
 };
 
 
+class GasCO2CIA : public OpacitySpecies {
+  public:
+    GasCO2CIA(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
+        : OpacitySpecies(_CO2, "CO2-CO2 CIA", "Continuum")
+        { 
+          cross_section_file_path = cross_section_path; 
+          spectral_grid = spectral_grid_ptr; 
+          continuum_available = true;
+
+          const std::string& dimer_data_path = "src/transport_coeff/data/CO2_dimer_data.bin";
+          loadDimerData(dimer_data_path);
+        
+          init();
+        }
+    virtual ~GasCO2CIA() {}
+  protected:
+    virtual bool calcContinuumAbsorption(
+      const double temperature,
+      const std::vector<double>& number_densities,
+      std::vector<double>& absorption_coeff);
+    private:
+      static constexpr int nS_ = 1713;
+      static constexpr int nT_ = 9;
+
+      bool data_loaded_ = false;
+      std::array<double, nS_> wn_arr_{};
+      std::array<double, nT_> temp_arr_{};
+      std::array<double, nS_ * nT_> dim_arr_{};  // column-major (FORTRAN order)
+      void loadDimerData(const std::string& filepath);
+
+      // Main entry point: compute CIA coefficient (cm^{-1}).
+      //   T  : temperature (K)
+      //   nu : wavenumber (cm^{-1})
+      //   Ps : partial pressure of CO2 (bar)
+      double compute(double T, double nu, double Ps) const;
+
+      // Analytical CIA for 0-500 cm^{-1}.  Returns cm^{-1} amagat^{-2}.
+      static double getspc(double temp, double wn);
+
+      // Data-driven CIA dimer spectrum for 1000-2000 cm^{-1}.
+      // Returns cm^{-1} amagat^{-2}.  Requires dimer data to be loaded.
+      double baranov(double temp, double wn) const;
+        std::vector<double> boundFreeAbsorption(const double temperature);
+        std::vector<double> freeFreeAbsorption(const double temperature);
+
+      // Modified Bessel function K1(x) * x.
+      // Precision better than 2.2e-7 (Abramowitz & Stegun, p.379).
+      static double xk1(double x);
+
+      // Bilinear interpolation on an irregular 2D grid (column-major storage).
+      static double bilinear(
+        const double* x_arr, const double* y_arr,
+        int nX, int nY, const double* f2d_arr,
+        double x, double y);
+};
+
+
+class GasH2OCIA : public OpacitySpecies {
+  public:
+    GasH2OCIA(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
+        : OpacitySpecies(_H2O, "H2O CIA", "Continuum")
+        { 
+          cross_section_file_path = cross_section_path; 
+          spectral_grid = spectral_grid_ptr; 
+          continuum_available = true;
+
+          const std::string& dimer_data_path = "src/transport_coeff/data/mt_ckd_h2o_continuum.dat";
+          loadContinuumData(dimer_data_path);
+        
+          init();
+        }
+    virtual ~GasH2OCIA() {}
+  protected:
+    virtual bool calcContinuumAbsorption(
+      const double temperature,
+      const std::vector<double>& number_densities,
+      std::vector<double>& absorption_coeff);
+    private:
+      static constexpr int t_ref = 296; //reference temperature for the CIA data (K)
+      static constexpr int p_ref = 1013 * 0.001; //reference pressure for the CIA data (bar)
+
+      bool data_loaded_ = false;
+
+      std::vector<double> self_continuum_reference;
+      std::vector<double> foreign_continuum_reference;
+      std::vector<double> self_temp_exp_reference;
+
+      void loadContinuumData(const std::string& filepath);
+      std::vector<double> radiationTerm(const double temperature);
+};
 
 
 

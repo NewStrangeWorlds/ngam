@@ -62,33 +62,43 @@ DiscreteOrdinates::DiscreteOrdinates(
 void DiscreteOrdinates::calculate(
   const Atmosphere& atmosphere,
   const OpacityCalculation& opacity,
-  RadiativeTransferOutput& output)
-{ 
+  RadiativeTransferOutput& output,
+  const RadiativeBoundaryConditions& bc)
+{
+  const double surf_temp = (bc.surface_temperature > 0)
+    ? bc.surface_temperature : atmosphere.temperature[0];
+
   for (size_t i=0; i<configs.size(); ++i)
   {
-    setTemperatureStructure(atmosphere.temperature, atmosphere.temperature[0]);
+    setTemperatureStructure(atmosphere.temperature, surf_temp);
   }
 
-  const double max_temperature = *std::max_element(
-    atmosphere.temperature.begin(), 
-    atmosphere.temperature.end());
+  const double max_temperature = std::max(
+    surf_temp,
+    *std::max_element(atmosphere.temperature.begin(), atmosphere.temperature.end()));
 
+  const bool has_irradiation = !bc.incident_flux.empty();
 
-  double surface_albedo = 0;
-  double incident_radiation = 0;
-  double zenith_angle = 0.5;
-  
+  // CGS [erg/cm^2/s/cm^-1] -> SI [W/m^2/cm^-1]: divide by 1e3
+  constexpr double cgs_to_si = 1e-3;
+
   #pragma omp parallel for
   for (size_t i=0; i<output.spectrum.size(); ++i)
+  {
+    const double incident = has_irradiation
+      ? bc.incident_flux[i] * cgs_to_si : 0.0;
+
     calculate(
-      opacity, 
-      atmosphere.altitude, 
-      surface_albedo,
-      incident_radiation,
-      zenith_angle,
+      opacity,
+      atmosphere.altitude,
+      bc.surface_albedo,
+      bc.has_surface,
+      incident,
+      bc.zenith_angle,
       i,
       max_temperature,
       output);
+  }
 
   output.integrateQuantities();
 }
@@ -151,6 +161,7 @@ void DiscreteOrdinates::calculate(
   const OpacityCalculation& opacity,
   const std::vector<double>& vertical_grid,
   const double surface_albedo,
+  const bool has_surface,
   const double incident_radiation,
   const double zenith_angle,
   const size_t nu_index,
@@ -180,7 +191,9 @@ void DiscreteOrdinates::calculate(
     asymmetry_parameter, 
     incident_radiation,
     zenith_angle,
-    surface_albedo);
+    surface_albedo,
+    has_surface);
+  
   if (aux::planckFunctionWavenumber(max_temperature, wavenumber) > 1.e-35)
     configs[thread_id].use_thermal_emission = true;
   else
@@ -236,14 +249,21 @@ void DiscreteOrdinates::setDISORTParam(
   const std::vector<double>& asymmetry_parameter,
   const double incident_radiation,
   const double zenith_angle,
-  const double surface_albedo)
+  const double surface_albedo,
+  const bool has_surface)
 { 
   configs[thread_id].surface_albedo  = surface_albedo;
+  if (wavenumber_input < 5000) configs[thread_id].surface_albedo = 0;
   configs[thread_id].direct_beam_flux = incident_radiation;
   configs[thread_id].direct_beam_mu = zenith_angle;
 
   configs[thread_id].wavenumber_low = wavenumber_input;
   configs[thread_id].wavenumber_high = wavenumber_input;
+  
+  if (has_surface)
+    configs[thread_id].use_diffusion_lower_bc = false;
+  else
+    configs[thread_id].use_diffusion_lower_bc = true;
 
   for (int lc = 0; lc < nb_layers; lc++)
   {
@@ -286,7 +306,6 @@ void DiscreteOrdinates::initDISORT()
   disortpp::DisortFluxConfig config(nb_grid_points-1, nb_streams, nb_streams);
 
   config.use_thermal_emission = true;
-  config.use_diffusion_lower_bc = true;
 
   configs.assign(nb_threads, config);
 

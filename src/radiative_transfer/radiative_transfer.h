@@ -112,6 +112,15 @@ struct RadiativeTransferOutput {
 
 
 
+struct RadiativeBoundaryConditions {
+  std::vector<double> incident_flux;  // per wavenumber [erg/cm^2/s/cm^-1], empty = none
+  double zenith_angle = 0.5;          // cos(theta) of incident beam
+  double surface_albedo = 0.0;
+  double surface_temperature = 0.0;   // K (0 = use atmosphere.temperature[0])
+  bool has_surface = false;           // whether to include surface emission in the radiative transfer calculation
+};
+
+
 class RadiativeTransfer{
   public:
     RadiativeTransfer(SpectralGrid* spectral_grid_) {
@@ -120,7 +129,8 @@ class RadiativeTransfer{
     virtual void calculate(
       const Atmosphere& atmosphere,
       const OpacityCalculation& opacity,
-      RadiativeTransferOutput& output) = 0;
+      RadiativeTransferOutput& output,
+      const RadiativeBoundaryConditions& bc = RadiativeBoundaryConditions{}) = 0;
     
     //change units of high-res spectrum from cm to micron^-1
     void changeSpectrumUnits(std::vector<double>& spectrum) {

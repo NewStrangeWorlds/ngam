@@ -35,8 +35,7 @@ namespace ngam {
 void MilneTemperature::calcProfile(
   const std::vector<double>& parameters,
   const double surface_gravity,
-  Atmosphere& atmosphere,
-  const RadiativeTransferOutput& radiation_field)
+  Atmosphere& atmosphere)
 {
   atmosphere.temperature.assign(atmosphere.pressure.size(), 0);
 

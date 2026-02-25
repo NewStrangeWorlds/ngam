@@ -6,18 +6,18 @@
 #include "../chemistry/chem_species.h"
 #include "../chemistry/chemistry.h"
 #include "../chemistry/select_chemistry.h"
-#include "../temperature/temperature.h"
-#include "../temperature/select_temperature_profile.h"
 #include "../radiative_transfer/radiative_transfer.h"
 #include "../radiative_transfer/select_radiative_transfer.h"
 #include "../object/brown_dwarf.h"
+#include "../object/terrestrial_planet.h"
+#include "../stellar/stellar_spectrum.h"
 
 namespace py = pybind11;
 using namespace ngam;
 
 
 // Factory: construct BrownDwarf from Python-friendly config arguments.
-// Component creation (chemistry, temperature, RT) happens inside C++ to
+// Component creation (chemistry, RT) happens inside C++ to
 // avoid the unique_ptr ownership transfer issues with pybind11.
 static std::unique_ptr<BrownDwarf> make_brown_dwarf(
     SpectralGrid& spectral_grid,
@@ -28,27 +28,27 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
     const std::vector<std::string>& opacity_species_folder,
     bool use_clouds,
     const std::vector<std::pair<std::string, std::vector<std::string>>>& chemistry_configs,
-    const std::string& temperature_type,
-    const std::vector<std::string>& temperature_params,
     const std::string& rt_type,
     const std::vector<std::string>& rt_params,
     double surface_gravity,
     double effective_temperature,
     double metallicity,
+    double c_to_o_ratio,
     double bottom_radius,
     bool use_variable_gravity,
-    const std::vector<double>& temperature_parameters,
-    const std::vector<double>& chemistry_parameters,
     size_t max_iterations,
     double convergence_threshold,
     double iteration_gamma,
-    bool use_convective_adjustment)
+    bool use_convective_adjustment,
+    size_t ng_interval,
+    double lre_fraction,
+    double min_convection_pressure,
+    double max_change_per_iteration)
 {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     for (auto& [type, params] : chemistry_configs)
         chemistry.push_back(selectChemistryModule(type, params));
 
-    auto temperature = selectTemperatureProfile(temperature_type, temperature_params);
     auto rt = selectRadiativeTransfer(
         rt_type, rt_params, nb_grid_points, &spectral_grid);
 
@@ -61,19 +61,82 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
         opacity_species_folder,
         use_clouds,
         std::move(chemistry),
-        std::move(temperature),
         std::move(rt),
         surface_gravity,
         effective_temperature,
         metallicity,
+        c_to_o_ratio,
         bottom_radius,
         use_variable_gravity,
-        temperature_parameters,
+        max_iterations,
+        convergence_threshold,
+        iteration_gamma,
+        use_convective_adjustment,
+        ng_interval,
+        lre_fraction,
+        min_convection_pressure,
+        max_change_per_iteration);
+}
+
+
+static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
+    SpectralGrid& spectral_grid,
+    size_t nb_grid_points,
+    const std::vector<double>& atmos_boundary_pressures,
+    const std::string& cross_section_file_path,
+    const std::vector<std::string>& opacity_species_symbol,
+    const std::vector<std::string>& opacity_species_folder,
+    bool use_clouds,
+    const std::vector<std::pair<std::string, std::vector<std::string>>>& chemistry_configs,
+    const std::string& rt_type,
+    const std::vector<std::string>& rt_params,
+    double surface_gravity,
+    double surface_albedo,
+    double zenith_angle,
+    double stellar_temperature,
+    double instellation,
+    const std::vector<double>& chemistry_parameters,
+    size_t max_iterations,
+    double convergence_threshold,
+    double iteration_gamma,
+    bool use_convective_adjustment,
+    size_t ng_interval,
+    double lre_fraction,
+    double min_convection_pressure,
+    double max_change_per_iteration)
+{
+    std::vector<std::unique_ptr<Chemistry>> chemistry;
+    for (auto& [type, params] : chemistry_configs)
+        chemistry.push_back(selectChemistryModule(type, params));
+
+    auto rt = selectRadiativeTransfer(
+        rt_type, rt_params, nb_grid_points, &spectral_grid);
+
+    auto star = std::make_unique<BlackbodyStar>(stellar_temperature, instellation);
+
+    return std::make_unique<TerrestrialPlanet>(
+        &spectral_grid,
+        nb_grid_points,
+        atmos_boundary_pressures,
+        cross_section_file_path,
+        opacity_species_symbol,
+        opacity_species_folder,
+        use_clouds,
+        std::move(chemistry),
+        std::move(rt),
+        surface_gravity,
+        surface_albedo,
+        zenith_angle,
+        std::move(star),
         chemistry_parameters,
         max_iterations,
         convergence_threshold,
         iteration_gamma,
-        use_convective_adjustment);
+        use_convective_adjustment,
+        ng_interval,
+        lre_fraction,
+        min_convection_pressure,
+        max_change_per_iteration);
 }
 
 
@@ -162,26 +225,81 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("opacity_species_folder"),
             py::arg("use_clouds"),
             py::arg("chemistry"),
-            py::arg("temperature_type"),
-            py::arg("temperature_params"),
             py::arg("rt_type"),
             py::arg("rt_params"),
             py::arg("surface_gravity"),
             py::arg("effective_temperature"),
             py::arg("metallicity"),
+            py::arg("c_to_o_ratio"),
             py::arg("bottom_radius"),
             py::arg("use_variable_gravity"),
+            py::arg("max_iterations") = 100,
+            py::arg("convergence_threshold") = 1e-4,
+            py::arg("iteration_gamma") = 0.5,
+            py::arg("use_convective_adjustment") = true,
+            py::arg("ng_interval") = 10,
+            py::arg("lre_fraction") = 0.0,
+            py::arg("min_convection_pressure") = 1e-4,
+            py::arg("max_change_per_iteration") = 0.1,
+            py::keep_alive<1, 2>())
+        .def("initialize", &BrownDwarf::initialize,
+            py::arg("temperature_type"),
+            py::arg("temperature_config"),
             py::arg("temperature_parameters"),
+            py::arg("init_chemistry"),
+            py::arg("init_chemistry_parameters"),
+            "Initialize from analytic temperature profile and chemistry")
+        .def("initialize_from_arrays", &BrownDwarf::initializeFromArrays,
+            py::arg("temperature"),
+            py::arg("number_densities"),
+            py::arg("mean_molecular_weight"),
+            "Initialize from saved temperature, number densities, and mean molecular weight arrays")
+        .def("compute", &BrownDwarf::computeAtmosphericStructure)
+        .def_readonly("radiation_field", &BrownDwarf::radiation_field)
+        .def_property_readonly("atmosphere", &BrownDwarf::getAtmosphere);
+
+    // ---- TerrestrialPlanet ----
+    py::class_<TerrestrialPlanet>(m, "TerrestrialPlanet")
+        .def(py::init(&make_terrestrial_planet),
+            py::arg("spectral_grid"),
+            py::arg("nb_grid_points"),
+            py::arg("atmos_boundary_pressures"),
+            py::arg("cross_section_file_path"),
+            py::arg("opacity_species_symbol"),
+            py::arg("opacity_species_folder"),
+            py::arg("use_clouds"),
+            py::arg("chemistry"),
+            py::arg("rt_type"),
+            py::arg("rt_params"),
+            py::arg("surface_gravity"),
+            py::arg("surface_albedo"),
+            py::arg("zenith_angle"),
+            py::arg("stellar_temperature"),
+            py::arg("instellation"),
             py::arg("chemistry_parameters"),
             py::arg("max_iterations") = 100,
             py::arg("convergence_threshold") = 1e-4,
             py::arg("iteration_gamma") = 0.5,
             py::arg("use_convective_adjustment") = true,
+            py::arg("ng_interval") = 10,
+            py::arg("lre_fraction") = 0.0,
+            py::arg("min_convection_pressure") = 1e-4,
+            py::arg("max_change_per_iteration") = 0.1,
             py::keep_alive<1, 2>())
-        .def("compute", &BrownDwarf::computeAtmosphericStructure)
-        .def("set_temperature", &BrownDwarf::setTemperature,
+        .def("initialize", &TerrestrialPlanet::initialize,
+            py::arg("temperature_type"),
+            py::arg("temperature_config"),
+            py::arg("temperature_parameters"),
+            py::arg("init_chemistry"),
+            py::arg("init_chemistry_parameters"),
+            "Initialize from analytic temperature profile and chemistry")
+        .def("initialize_from_arrays", &TerrestrialPlanet::initializeFromArrays,
             py::arg("temperature"),
-            "Set initial temperature profile from an external array (skips analytic init)")
-        .def_readonly("radiation_field", &BrownDwarf::radiation_field)
-        .def_property_readonly("atmosphere", &BrownDwarf::getAtmosphere);
+            py::arg("number_densities"),
+            py::arg("mean_molecular_weight"),
+            "Initialize from saved temperature, number densities, and mean molecular weight arrays")
+        .def("compute", &TerrestrialPlanet::computeAtmosphericStructure)
+        .def_readonly("radiation_field", &TerrestrialPlanet::radiation_field)
+        .def_property_readonly("atmosphere", &TerrestrialPlanet::getAtmosphere)
+        .def_property_readonly("surface_temperature", &TerrestrialPlanet::getSurfaceTemperature);
 }

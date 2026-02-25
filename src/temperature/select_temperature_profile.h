@@ -46,7 +46,7 @@ namespace temp_profile_modules{
 
 
 
-inline std::unique_ptr<Temperature> selectTemperatureProfile(
+inline std::unique_ptr<TemperatureProfile> selectTemperatureProfile(
   const std::string profile_type,
   const std::vector<std::string>& parameters)
 {

@@ -74,6 +74,8 @@ set(LIB_SRC
   src/transport_coeff/sampled_data.cpp
   src/transport_coeff/species_rayleigh_cross_sections.cpp
   src/transport_coeff/transport_coeff.cpp
+  src/transport_coeff/co2_cia.cpp
+  src/transport_coeff/h2o_cia.cpp
   src/transport_coeff/h_m.cpp
   src/radiative_transfer/discrete_ordinate.cpp
   src/radiative_transfer/short_characteristics.cpp
@@ -82,6 +84,7 @@ set(LIB_SRC
   src/chemistry/fastchem_chemistry.cpp
   src/temperature/milne_solution_temperature.cpp
   src/temperature/time_stepping_temperature.cpp
+  src/temperature/time_stepping_lre_temperature.cpp
   src/convection/dry_adiabatic.cpp
 )
 

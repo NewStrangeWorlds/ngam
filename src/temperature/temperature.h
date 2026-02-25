@@ -18,8 +18,8 @@
 */
 
 
-#ifndef _temperature_h
-#define _temperature_h
+#ifndef _temperature_profile_h
+#define _temperature_profile_h
 
 #include <vector>
 #include <cstddef>
@@ -28,33 +28,19 @@
 
 namespace ngam {
 
-struct RadiativeTransferOutput;
 
-
-class Temperature{
+class TemperatureProfile{
   public:
-    virtual ~Temperature() {}
+    virtual ~TemperatureProfile() {}
     virtual void calcProfile(
       const std::vector<double>& parameters,
       const double surface_gravity,
-      Atmosphere& atmosphere,
-      const RadiativeTransferOutput& radiation_field) = 0;
+      Atmosphere& atmosphere) = 0;
     size_t nbParameters() {return nb_parameters;}
   protected:
     size_t nb_parameters {};
-    
-    // bool checkProfile(std::vector<double>& temperature) {
-    //   for (auto & i : temperature)
-    //     if (i < 50)
-    //     {
-    //       i = 50;
-    //       return true;
-    //     }
-      
-    //   return false;
-    // };
 };
 
 
 }
-#endif 
+#endif

@@ -44,7 +44,8 @@ class ShortCharacteristics : public RadiativeTransfer{
     virtual void calculate(
       const Atmosphere& atmosphere,
       const OpacityCalculation& opacity,
-      RadiativeTransferOutput& output);
+      RadiativeTransferOutput& output,
+      const RadiativeBoundaryConditions& bc = RadiativeBoundaryConditions{}) override;
   
   private:
     const std::vector<double> gauss_nodes{0.211324865405187, 0.788675134594813};

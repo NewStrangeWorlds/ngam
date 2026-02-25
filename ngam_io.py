@@ -131,3 +131,28 @@ def load_model_data(filename):
         The full dataset with all atmospheric, radiation, and spectral data.
     """
     return xr.open_dataset(filename, engine="h5netcdf")
+
+
+def load_init_arrays(filename):
+    """Load temperature, number densities, and mean molecular weight from a
+    saved model file, as plain Python lists suitable for
+    ``BrownDwarf.initialize_from_arrays()``.
+
+    Parameters
+    ----------
+    filename : str
+        Path to a NetCDF4 file previously written by save_model().
+
+    Returns
+    -------
+    dict with keys ``temperature``, ``number_densities``,
+    ``mean_molecular_weight``, each as a Python list (or list of lists).
+    """
+    ds = xr.open_dataset(filename, engine="h5netcdf")
+    result = {
+        "temperature": ds["temperature"].values.tolist(),
+        "number_densities": ds["number_densities"].values.tolist(),
+        "mean_molecular_weight": ds["mean_molecular_weight"].values.tolist(),
+    }
+    ds.close()
+    return result

@@ -22,6 +22,8 @@ void DryAdiabaticAdjustment::adjust(Atmosphere& atmosphere)
     // sweep from bottom (i=0, high P) to top (i=n-2)
     for (size_t i = 0; i < n - 1; ++i)
     {
+      if (atmosphere.pressure[i+1] < min_pressure) break;
+
       const double ln_P_i   = std::log(atmosphere.pressure[i]);
       const double ln_P_ip1 = std::log(atmosphere.pressure[i+1]);
       const double d_ln_P   = ln_P_i - ln_P_ip1;  // > 0

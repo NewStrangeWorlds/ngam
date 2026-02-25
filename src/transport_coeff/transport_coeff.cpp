@@ -147,6 +147,22 @@ bool TransportCoefficients::addOpacitySpecies(
     return true;
   }
 
+  //CO2-CO2 CIA free-free and bound-free continuum
+  if (species_symbol == "CO2-CIA")
+  {
+    gas_species.push_back(std::make_unique<GasCO2CIA>(cross_section_file_path, spectral_grid));
+
+    return true;
+  }
+
+  //H2O self and foreign CIA
+  if (species_symbol == "H2O-CIA")
+  {
+    gas_species.push_back(std::make_unique<GasH2OCIA>(cross_section_file_path, spectral_grid));
+
+    return true;
+  }
+
   //H2 Rayleigh scattering
   if (species_symbol == "H2" && species_folder == "Rayleigh")
   {

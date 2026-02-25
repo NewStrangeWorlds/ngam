@@ -51,7 +51,8 @@ class DiscreteOrdinates : public RadiativeTransfer{
     virtual void calculate(
       const Atmosphere& atmosphere,
       const OpacityCalculation& opacity,
-      RadiativeTransferOutput& output);
+      RadiativeTransferOutput& output,
+      const RadiativeBoundaryConditions& bc = RadiativeBoundaryConditions{}) override;
   private:
     size_t nb_streams = 0;
     size_t nb_grid_points = 0;
@@ -68,6 +69,7 @@ class DiscreteOrdinates : public RadiativeTransfer{
       const OpacityCalculation& opacity,
       const std::vector<double>& vertical_grid,
       const double surface_albedo,
+      const bool has_surface,
       const double incident_radiation,
       const double zenith_angle,
       const size_t nu_index,
@@ -91,7 +93,8 @@ class DiscreteOrdinates : public RadiativeTransfer{
       const std::vector<double>& asymmetry_parameter,
       const double incident_radiation,
       const double zenith_angle,
-      const double surface_albedo);
+      const double surface_albedo,
+      const bool has_surface);
     void initDISORT();
 };
 

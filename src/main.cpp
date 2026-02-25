@@ -6,7 +6,6 @@
 #include "spectral_grid/spectral_grid.h"
 
 #include "chemistry/select_chemistry.h"
-#include "temperature/select_temperature_profile.h"
 #include "radiative_transfer/select_radiative_transfer.h"
 
 #include "object/brown_dwarf.h"
@@ -31,11 +30,6 @@ int main(int argc, char *argv[])
       config.chemistry_model[i],
       config.chemistry_parameters[i]);
 
-  // create temperature profile
-  auto temperature_profile = ngam::selectTemperatureProfile(
-    config.temperature_profile_type,
-    config.temperature_profile_parameters);
-
   // create radiative transfer solver
   auto radiative_transfer = ngam::selectRadiativeTransfer(
     config.radiative_transfer_type,
@@ -46,10 +40,10 @@ int main(int argc, char *argv[])
   // fundamental model parameters
   double effective_temperature = 3000.0;
   double metallicity = 0.5;
+  double c_to_o_ratio = 0.5;
 
   // sub-model parameters
   std::vector<double> temperature_parameters{1e-4, effective_temperature};  // kappa_ross, T_eff (for Milne init)
-  std::vector<double> chemistry_parameters{metallicity, 0.5};              // metallicity, C/O
 
   // assemble the model
   ngam::BrownDwarf brown_dwarf(
@@ -61,15 +55,21 @@ int main(int argc, char *argv[])
     config.opacity_species_folder,
     !config.cloud_model.empty(),
     std::move(chemistry),
-    std::move(temperature_profile),
     std::move(radiative_transfer),
     config.surface_gravity,
     effective_temperature,
     metallicity,
+    c_to_o_ratio,
     config.bottom_radius,
-    config.use_variable_gravity,
+    config.use_variable_gravity);
+
+  // initialize from analytic profile + chemistry
+  brown_dwarf.initialize(
+    config.temperature_profile_type,
+    config.temperature_profile_parameters,
     temperature_parameters,
-    chemistry_parameters);
+    {{"eq", {"fastchem_parameters.dat"}}},
+    {metallicity, c_to_o_ratio});
 
   brown_dwarf.computeAtmosphericStructure();
 

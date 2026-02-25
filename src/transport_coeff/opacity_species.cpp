@@ -363,7 +363,7 @@ void OpacitySpecies::calcTransportCoefficients(
 
   for (const auto & i : cia_collision_partner)
     number_density *= number_densities[i];
-
+  
   if (number_density == 0) return;
 
 

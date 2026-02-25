@@ -39,7 +39,8 @@ namespace ngam{
 void ShortCharacteristics::calculate(
   const Atmosphere& atmosphere,
   const OpacityCalculation& opacity,
-  RadiativeTransferOutput& output)
+  RadiativeTransferOutput& output,
+  const RadiativeBoundaryConditions& /*bc*/)
 {
 
   #pragma omp parallel for schedule(dynamic, 1)

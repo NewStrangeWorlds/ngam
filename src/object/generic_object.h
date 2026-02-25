@@ -30,7 +30,6 @@
 #include "../transport_coeff/opacity_calc.h"
 #include "../atmosphere/atmosphere.h"
 #include "../chemistry/chemistry.h"
-#include "../temperature/temperature.h"
 #include "../radiative_transfer/radiative_transfer.h"
 #include "../convection/convection.h"
 
@@ -49,7 +48,6 @@ class GenericObject {
       const std::vector<std::string>& opacity_species_folder,
       bool use_clouds,
       std::vector<std::unique_ptr<Chemistry>> chemistry_,
-      std::unique_ptr<Temperature> temperature_profile_,
       std::unique_ptr<RadiativeTransfer> radiative_transfer_)
       : radiation_field(spectral_grid_, nb_grid_points),
         spectral_grid(spectral_grid_),
@@ -62,7 +60,6 @@ class GenericObject {
           opacity_species_folder,
           use_clouds),
         chemistry(std::move(chemistry_)),
-        temperature_profile(std::move(temperature_profile_)),
         radiative_transfer(std::move(radiative_transfer_))
     {}
     virtual ~GenericObject() {}
@@ -79,9 +76,21 @@ class GenericObject {
     OpacityCalculation opacity;
 
     std::vector<std::unique_ptr<Chemistry>> chemistry;
-    std::unique_ptr<Temperature> temperature_profile;
     std::unique_ptr<RadiativeTransfer> radiative_transfer;
     std::unique_ptr<Convection> convection;
+
+    void shapiroFilter(std::vector<double>& data, const double alpha) {
+      const size_t n = atmosphere.temperature.size();
+      std::vector<double> data_smooth(n);
+      data_smooth[0] = data[0];
+      data_smooth[n-1] = data[n-1];
+  
+      for (size_t i = 1; i < n - 1; ++i)
+        data_smooth[i] = (1.0 - 2.0*alpha) * data[i]
+                + alpha * (data[i-1] + data[i+1]);
+     
+      data = std::move(data_smooth);
+    }
 };
 
 
