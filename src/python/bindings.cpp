@@ -11,6 +11,7 @@
 #include "../object/brown_dwarf.h"
 #include "../object/terrestrial_planet.h"
 #include "../stellar/stellar_spectrum.h"
+#include "../surface/select_surface.h"
 
 namespace py = pybind11;
 using namespace ngam;
@@ -91,10 +92,12 @@ static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
     const std::string& rt_type,
     const std::vector<std::string>& rt_params,
     double surface_gravity,
-    double surface_albedo,
     double zenith_angle,
-    double stellar_temperature,
+    const std::string& stellar_type,
+    const std::vector<std::string>& stellar_params,
     double instellation,
+    const std::string& surface_type,
+    const std::vector<std::string>& surface_params,
     const std::vector<double>& chemistry_parameters,
     size_t max_iterations,
     double convergence_threshold,
@@ -112,7 +115,35 @@ static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
     auto rt = selectRadiativeTransfer(
         rt_type, rt_params, nb_grid_points, &spectral_grid);
 
-    auto star = std::make_unique<BlackbodyStar>(stellar_temperature, instellation);
+    std::unique_ptr<StellarSpectrum> star;
+
+    if (stellar_type == "blackbody")
+    {
+      if (stellar_params.empty())
+        throw std::runtime_error(
+          "Blackbody stellar spectrum requires one parameter "
+          "(stellar temperature in K)");
+
+      double stellar_temperature = std::stod(stellar_params[0]);
+      star = std::make_unique<BlackbodyStar>(stellar_temperature, instellation);
+    }
+    else if (stellar_type == "tabulated")
+    {
+      if (stellar_params.empty())
+        throw std::runtime_error(
+          "Tabulated stellar spectrum requires one parameter "
+          "(path to spectrum file)");
+
+      star = std::make_unique<TabulatedStar>(stellar_params[0], instellation);
+    }
+    else
+    {
+      throw std::runtime_error(
+        "Unknown stellar spectrum type: " + stellar_type
+        + ". Supported: blackbody, tabulated");
+    }
+
+    auto surface = selectSurface(surface_type, surface_params, &spectral_grid);
 
     return std::make_unique<TerrestrialPlanet>(
         &spectral_grid,
@@ -125,9 +156,9 @@ static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
         std::move(chemistry),
         std::move(rt),
         surface_gravity,
-        surface_albedo,
         zenith_angle,
         std::move(star),
+        std::move(surface),
         chemistry_parameters,
         max_iterations,
         convergence_threshold,
@@ -272,10 +303,12 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("rt_type"),
             py::arg("rt_params"),
             py::arg("surface_gravity"),
-            py::arg("surface_albedo"),
             py::arg("zenith_angle"),
-            py::arg("stellar_temperature"),
+            py::arg("stellar_type"),
+            py::arg("stellar_params"),
             py::arg("instellation"),
+            py::arg("surface_type"),
+            py::arg("surface_params"),
             py::arg("chemistry_parameters"),
             py::arg("max_iterations") = 100,
             py::arg("convergence_threshold") = 1e-4,

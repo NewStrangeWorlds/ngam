@@ -219,6 +219,22 @@ bool TransportCoefficients::addOpacitySpecies(
     return true;
   }
 
+  //N2 Rayleigh
+  if (species_symbol == "N2" && species_folder == "Rayleigh")
+  {
+    gas_species.push_back(std::make_unique<GasN2Rayleigh>(cross_section_file_path, spectral_grid, ""));
+
+    return true;
+  }
+
+  //O2 Rayleigh
+  if (species_symbol == "O2" && species_folder == "Rayleigh")
+  {
+    gas_species.push_back(std::make_unique<GasO2Rayleigh>(cross_section_file_path, spectral_grid, ""));
+
+    return true;
+  }
+
   //now we try the generic ones
   for (size_t i=0; i<constants::species_data.size(); ++i)
   {
@@ -260,12 +276,15 @@ void TransportCoefficients::calculate(
 
 
   for (unsigned int i=0; i<gas_species.size(); i++)
+  {
+    //std::cout << gas_species[i]->species_name << "\n";
     gas_species[i]->calcTransportCoefficients(
       temperature,
       pressure,
       number_densities,
       absorption_coeff,
       scattering_coeff);
+    }
 }
 
 

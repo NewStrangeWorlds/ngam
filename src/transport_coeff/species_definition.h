@@ -220,7 +220,7 @@ class GasCO2Rayleigh : public OpacitySpecies {
           init();
         }
     virtual ~GasCO2Rayleigh() {}
-  protected:
+  protected:     
     virtual bool calcRayleighCrossSections(std::vector<double>& cross_sections);
 };
 
@@ -269,6 +269,54 @@ class GasH2ORayleigh : public OpacitySpecies {
           init();
         }
     virtual ~GasH2ORayleigh() {}
+  protected:
+    virtual bool calcRayleighCrossSections(std::vector<double>& cross_sections);
+};
+
+
+class GasN2Rayleigh : public OpacitySpecies {
+  public:
+    GasN2Rayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr, const std::string folder)
+        : OpacitySpecies(_N2, "N2 Rayleigh", "Rayleigh")
+        {
+          cross_section_file_path = cross_section_path; 
+          spectral_grid = spectral_grid_ptr; 
+          rayleigh_available = true;
+          init();
+        }
+    GasN2Rayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
+        : OpacitySpecies(_N2, "N2 Rayleigh", "Rayleigh")
+        {
+          cross_section_file_path = cross_section_path; 
+          spectral_grid = spectral_grid_ptr; 
+          rayleigh_available = true;
+          init();
+        }
+    virtual ~GasN2Rayleigh() {}
+  protected:
+    virtual bool calcRayleighCrossSections(std::vector<double>& cross_sections);
+};
+
+
+class GasO2Rayleigh : public OpacitySpecies {
+  public:
+    GasO2Rayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr, const std::string folder)
+        : OpacitySpecies(_O2, "O2 Rayleigh", "Rayleigh")
+        {
+          cross_section_file_path = cross_section_path; 
+          spectral_grid = spectral_grid_ptr; 
+          rayleigh_available = true;
+          init();
+        }
+    GasO2Rayleigh(const std::string& cross_section_path, SpectralGrid* spectral_grid_ptr) 
+        : OpacitySpecies(_O2, "O2 Rayleigh", "Rayleigh")
+        {
+          cross_section_file_path = cross_section_path; 
+          spectral_grid = spectral_grid_ptr; 
+          rayleigh_available = true;
+          init();
+        }
+    virtual ~GasO2Rayleigh() {}
   protected:
     virtual bool calcRayleighCrossSections(std::vector<double>& cross_sections);
 };

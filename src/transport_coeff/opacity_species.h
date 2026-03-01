@@ -75,6 +75,7 @@ class OpacitySpecies {
 
     std::vector<SampledData> sampled_cross_sections;
     std::vector<std::vector<SampledData*>> ordered_data_list;
+    std::vector<double> rayleigh_cross_sections;
 
     void init();
     void orderDataList();

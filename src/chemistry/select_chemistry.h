@@ -26,6 +26,7 @@
 
 #include "fastchem_chemistry.h"
 #include "isoprofile_chemistry.h"
+#include "fixed_chemistry.h"
 
 #include "../additional/exceptions.h"
 
@@ -40,9 +41,9 @@ namespace ngam {
 //definition of the different chemistry modules with an
 //identifier, a keyword to be located in the config file and a short version of the keyword
 namespace chemistry_modules{
-  enum id {iso, eq};
-  const std::vector<std::string> description {"isoprofile", "equilibrium"};
-  const std::vector<std::string> description_short {"iso", "eq"};
+  enum id {iso, eq, fixed};
+  const std::vector<std::string> description {"isoprofile", "equilibrium", "fixed"};
+  const std::vector<std::string> description_short {"iso", "eq", "fix"};
 }
 
 
@@ -96,6 +97,13 @@ inline std::unique_ptr<Chemistry> selectChemistryModule(
     return std::make_unique<IsoprofileChemistry>(parameters);
   }
 
+  if (module_id == chemistry_modules::fixed)
+  {
+    if (parameters.size() != 1) {
+        std::string error_message = "Fixed chemistry requires exactly one parameter!\n";
+        throw InvalidInput(std::string ("forward_model.config"), error_message);}
+    return std::make_unique<FixedChemistry>(parameters[0]);
+  }
 
   //we should never reach this point
   return nullptr;

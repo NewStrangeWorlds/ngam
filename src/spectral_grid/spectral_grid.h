@@ -80,16 +80,19 @@ class SpectralGrid{
     std::vector<double> interpolateToWavenumberGrid(
       const std::vector<double>& data_x,
       const std::vector<double>& data_y,
-      const bool log_interpolation);
+      const bool log_interpolation,
+      const bool extrapolate=false);
     std::vector<double> interpolateToWavelengthGrid(
       const std::vector<double>& data_x,
       const std::vector<double>& data_y,
-      const bool log_interpolation);
+      const bool log_interpolation,
+      const bool extrapolate=false);
     std::vector<double> interpolateToWavelengthGrid(
       const std::vector<double>& data_x,
       const std::vector<double>& data_y,
       const std::vector<double>& new_x,
-      const bool log_interpolation);
+      const bool log_interpolation,
+      const bool extrapolate=false);
     std::string crossSectionFilePath() const {
       return cross_section_file_path;}
 

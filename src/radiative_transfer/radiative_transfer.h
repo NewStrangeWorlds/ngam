@@ -113,11 +113,11 @@ struct RadiativeTransferOutput {
 
 
 struct RadiativeBoundaryConditions {
-  std::vector<double> incident_flux;  // per wavenumber [erg/cm^2/s/cm^-1], empty = none
-  double zenith_angle = 0.5;          // cos(theta) of incident beam
-  double surface_albedo = 0.0;
-  double surface_temperature = 0.0;   // K (0 = use atmosphere.temperature[0])
-  bool has_surface = false;           // whether to include surface emission in the radiative transfer calculation
+  std::vector<double> incident_flux;   // per wavenumber [erg/cm^2/s/cm^-1], empty = none
+  double zenith_angle = 0.5;           // cos(theta) of incident beam
+  std::vector<double> surface_albedo;  // per wavenumber, empty = zero everywhere
+  double surface_temperature = 0.0;    // K (0 = use atmosphere.temperature[0])
+  bool has_surface = false;            // whether to include surface emission in the radiative transfer calculation
 };
 
 

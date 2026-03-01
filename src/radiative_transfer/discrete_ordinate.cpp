@@ -88,10 +88,12 @@ void DiscreteOrdinates::calculate(
     const double incident = has_irradiation
       ? bc.incident_flux[i] * cgs_to_si : 0.0;
 
+    const double albedo_i = bc.surface_albedo.empty() ? 0.0 : bc.surface_albedo[i];
+
     calculate(
       opacity,
       atmosphere.altitude,
-      bc.surface_albedo,
+      albedo_i,
       bc.has_surface,
       incident,
       bc.zenith_angle,
@@ -252,8 +254,7 @@ void DiscreteOrdinates::setDISORTParam(
   const double surface_albedo,
   const bool has_surface)
 { 
-  configs[thread_id].surface_albedo  = surface_albedo;
-  if (wavenumber_input < 5000) configs[thread_id].surface_albedo = 0;
+  configs[thread_id].surface_albedo = surface_albedo;
   configs[thread_id].direct_beam_flux = incident_radiation;
   configs[thread_id].direct_beam_mu = zenith_angle;
 

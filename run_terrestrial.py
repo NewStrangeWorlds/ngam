@@ -11,11 +11,14 @@ from ngam_io import save_model, load_model_data
 opacity_data_path = "/media/data/opacity_data/helios-k/"
 
 opacity_species = [
-    ("H2O",        "Rayleigh"),
-    ("CO2",        "Rayleigh"),
+    ("N2",         "Rayleigh"),
+    ("O2",         "Rayleigh"),
+    ("O3",         "Molecules/16O3__HITRAN2020_e2b"),
     ("H2O",        "Molecules/1H2-16O__POKAZATEL_e2b"),
+    ("CH4",        "Molecules/12C-1H4__YT34to10_e2b"),
+    ("N2O",        "Molecules/14N2-16O__HITEMP2019_e2b"),
     ("CO2",        "Molecules/12C-16O2__CDSD_4000_e2b"),
-    ("CO2-CIA",    "none"),
+    #("CO2-CIA",    "none"),
     ("H2O-CIA",    "none")
 ]
 
@@ -28,7 +31,7 @@ species_folders = [s[1] for s in opacity_species]
 
 grid = pyngam.SpectralGrid(
     opacity_data_path, "",
-    2, 1000.0,
+    2, 10000.0,
     0.3, 100.0)
 
 # Chemistry: isoprofile with prescribed mixing ratios.
@@ -48,6 +51,7 @@ composition = {
 
 mix_ratios = [0.7, 0.2, 1e-4, 1-0.2-0.7-1e-4]  # H2, O2, H2O, N2
 
+
 # for name, vmr in composition.items():
 #     idx = all_species.index(name)
 #     mix_ratios[idx] = vmr
@@ -60,14 +64,16 @@ model = pyngam.TerrestrialPlanet(
     opacity_species_symbol=species_symbols,
     opacity_species_folder=species_folders,
     use_clouds=False,
-    chemistry=[("iso", ["CO2", "O2", "H2O", "N2"])],
+    chemistry=[("fixed", ["data/Earth/earth_standard_composition.dat"])],
     rt_type="disort",
     rt_params=["4"],
     surface_gravity=980.0,       # cm/s^2 (~ Earth)
-    surface_albedo=0.3,
     zenith_angle=0.5,            # cos(60 deg) = global average approximation
-    stellar_temperature=5780.0,  # K (Sun)
-    instellation=1361e3*0.5,         # erg/cm^2/s (solar constant: 1361 W/m^2 * 1e3)
+    stellar_type="tabulated",
+    stellar_params=["data/stellar_spectra/spectrum_sun.dat"],   # stellar temperature in K (Sun)
+    instellation=1361e3*0.5,     # erg/cm^2/s (solar constant: 1361 W/m^2 * 1e3, 0.5 for fast rotator)
+    surface_type="variable_albedo",       # variable: albedo from file
+    surface_params=["data/Earth/earth_spectral_surface_reflection.dat"],  #albedo file
     chemistry_parameters=mix_ratios,
     max_iterations=2000,
     convergence_threshold=1e-5,
@@ -80,7 +86,7 @@ model = pyngam.TerrestrialPlanet(
 # --- Initialize ---
 
 # Option 2: Restart from a saved file
-ds = load_model_data("output_terrestrial_nc.nc")
+ds = load_model_data("output_terrestrial.nc")
 model.initialize_from_arrays(
     temperature=ds["temperature"].values.tolist(),
     number_densities=ds["number_densities"].values.tolist(),
@@ -91,7 +97,7 @@ ds.close()
 #     temperature_type="const",
 #     temperature_config=[],
 #     temperature_parameters=[300.0],
-#     init_chemistry=[("iso", ["CO2", "O2", "H2O", "N2"])],
+#     init_chemistry=[("fixed", ["data/Earth/earth_standard_composition.dat"])],
 #     init_chemistry_parameters=mix_ratios)
 
 

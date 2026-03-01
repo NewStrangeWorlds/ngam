@@ -82,6 +82,7 @@ set(LIB_SRC
   src/atmosphere/atmosphere.cpp
   src/chemistry/isoprofile_chemistry.cpp
   src/chemistry/fastchem_chemistry.cpp
+  src/chemistry/fixed_chemistry.cpp
   src/temperature/milne_solution_temperature.cpp
   src/temperature/time_stepping_temperature.cpp
   src/temperature/time_stepping_lre_temperature.cpp

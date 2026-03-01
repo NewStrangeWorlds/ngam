@@ -35,7 +35,11 @@ namespace ngam{
 
 
 
-std::vector<double> SpectralGrid::interpolateToWavenumberGrid(const std::vector<double>& data_x, const std::vector<double>& data_y, const bool log_interpolation)
+std::vector<double> SpectralGrid::interpolateToWavenumberGrid(
+  const std::vector<double>& data_x, 
+  const std::vector<double>& data_y, 
+  const bool log_interpolation,  
+  const bool extrapolate)
 {
   std::vector<double> x = data_x;
   std::vector<double> y = data_y;
@@ -48,12 +52,16 @@ std::vector<double> SpectralGrid::interpolateToWavenumberGrid(const std::vector<
 
   x = wavenumberToWavelength(x);
 
-  return interpolateToWavelengthGrid(x, y, log_interpolation);
+  return interpolateToWavelengthGrid(x, y, log_interpolation, extrapolate);
 }
 
 
 
-std::vector<double> SpectralGrid::interpolateToWavelengthGrid(const std::vector<double>& data_x, const std::vector<double>& data_y, const bool log_interpolation)
+std::vector<double> SpectralGrid::interpolateToWavelengthGrid(
+  const std::vector<double>& data_x, 
+  const std::vector<double>& data_y, 
+  const bool log_interpolation,
+  const bool extrapolate)
 {
   std::vector<double> x = data_x;
   std::vector<double> y = data_y;
@@ -70,15 +78,33 @@ std::vector<double> SpectralGrid::interpolateToWavelengthGrid(const std::vector<
   std::vector<double> interpolated_data(nb_spectral_points, 0.0);
 
 
-  auto linearInterpolation = [] (const double x1, const double x2, const double y1, const double y2, const double x){return y1 + (y2 - y1) * (x - x1)/(x2 - x1);};
+  auto linearInterpolation = [] (
+    const double x1, 
+    const double x2, 
+    const double y1, 
+    const double y2, 
+    const double x){
+      return y1 + (y2 - y1) * (x - x1)/(x2 - x1);};
 
 
   size_t x_start = 0;
 
   for (size_t i=0; i<nb_spectral_points; ++i)
   {
-    if (wavelength_list[i] > x.front()) continue;
-    if (wavelength_list[i] < x.back()) break;
+    if (wavelength_list[i] > x.front() && extrapolate == false) continue;
+    if (wavelength_list[i] < x.back() && extrapolate == false) break;
+    
+    if (wavelength_list[i] > x.front())
+    {
+      interpolated_data[i] = y.front();
+      continue;
+    }
+
+    if (wavelength_list[i] < x.back())
+    {
+      interpolated_data[i] = y.back();
+      continue;
+    }
 
     auto it = std::find_if(x.cbegin()+x_start, x.cend(), [this, i](double val){return (val <= wavelength_list[i]); } );
 
@@ -107,7 +133,8 @@ std::vector<double> SpectralGrid::interpolateToWavelengthGrid(
   const std::vector<double>& data_x, 
   const std::vector<double>& data_y, 
   const std::vector<double>& new_x,
-  const bool log_interpolation)
+  const bool log_interpolation,
+  const bool extrapolate)
 {
   std::vector<double> x = data_x;
   std::vector<double> y = data_y;
@@ -139,8 +166,20 @@ std::vector<double> SpectralGrid::interpolateToWavelengthGrid(
 
   for (size_t i=0; i<nb_points; ++i)
   {
-    if (new_x[i] > x.front()) continue;
-    if (new_x[i] < x.back()) break;
+    if (new_x[i] > x.front() && extrapolate == false) continue;
+    if (new_x[i] < x.back() && extrapolate == false) break;
+
+    if (new_x[i] > x.front())
+    {
+      interpolated_data[i] = y.front();
+      continue;
+    }
+
+    if (new_x[i] < x.back())
+    {
+      interpolated_data[i] = y.back();
+      continue;
+    }
 
     auto it = std::find_if(
       x.cbegin()+x_start, 

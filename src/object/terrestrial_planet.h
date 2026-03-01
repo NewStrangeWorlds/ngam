@@ -17,6 +17,7 @@
 #include "../chemistry/select_chemistry.h"
 #include "../convection/dry_adiabatic.h"
 #include "../stellar/stellar_spectrum.h"
+#include "../surface/generic_surface.h"
 
 
 namespace ngam {
@@ -35,9 +36,9 @@ class TerrestrialPlanet : public GenericObject {
       std::vector<std::unique_ptr<Chemistry>> chemistry,
       std::unique_ptr<RadiativeTransfer> radiative_transfer,
       double surface_gravity_,
-      double surface_albedo_,
       double zenith_angle_,
       std::unique_ptr<StellarSpectrum> stellar_spectrum_,
+      std::unique_ptr<GenericSurface> surface_,
       const std::vector<double>& chemistry_parameters_,
       size_t max_iterations_ = 100,
       double convergence_threshold_ = 1e-4,
@@ -58,9 +59,9 @@ class TerrestrialPlanet : public GenericObject {
           std::move(chemistry),
           std::move(radiative_transfer)),
         surface_gravity(surface_gravity_),
-        surface_albedo(surface_albedo_),
         zenith_angle(zenith_angle_),
         stellar_spectrum(std::move(stellar_spectrum_)),
+        surface(std::move(surface_)),
         chemistry_parameters(chemistry_parameters_),
         max_iterations(max_iterations_),
         convergence_threshold(convergence_threshold_),
@@ -94,7 +95,7 @@ class TerrestrialPlanet : public GenericObject {
       std::vector<std::unique_ptr<Chemistry>> init_chemistry;
       for (auto& [type, params] : init_chemistry_configs)
         init_chemistry.push_back(selectChemistryModule(type, params));
-      
+
       size_t param_offset = 0;
       for (auto& chem : init_chemistry)
       {
@@ -113,8 +114,8 @@ class TerrestrialPlanet : public GenericObject {
 
       atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
 
-      // initialize surface temperature from equilibrium estimate
-      surface_temperature = atmosphere.temperature[0];
+      // initialize surface temperature from bottom of atmosphere
+      surface->temperature = atmosphere.temperature[0];
 
       std::cout << "\n  Initialized from " << temperature_type
                 << " temperature profile + chemistry.\n";
@@ -131,12 +132,12 @@ class TerrestrialPlanet : public GenericObject {
 
       atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
 
-      surface_temperature = atmosphere.temperature[0];
+      surface->temperature = atmosphere.temperature[0];
 
       std::cout << "\n  Initialized from external arrays.\n";
     }
 
-    double getSurfaceTemperature() const { return surface_temperature; }
+    double getSurfaceTemperature() const { return surface->temperature; }
 
     bool computeAtmosphericStructure() override
     {
@@ -159,7 +160,6 @@ class TerrestrialPlanet : public GenericObject {
                 << "  convergence threshold: " << convergence_threshold << "\n"
                 << "  Ng acceleration:       every " << ng_interval << " iterations"
                 << (ng_interval == 0 ? " (disabled)" : "") << "\n"
-                << "  surface albedo:        " << surface_albedo << "\n"
                 << "  zenith angle (cos):    " << zenith_angle << "\n\n" << std::fixed;
 
       std::cout << "  " << std::setw(5) << "iter"
@@ -176,13 +176,13 @@ class TerrestrialPlanet : public GenericObject {
       for (size_t iter = 0; iter < max_iterations; ++iter)
       {
         std::vector<double> old_temperature = atmosphere.temperature;
-
+        
         // 1. Chemistry
         calcChemistry();
 
         // 2. Atmosphere structure (density, altitude, scale height)
         atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
-
+        
         // 3. Opacities
         opacity.calculate();
 
@@ -190,29 +190,22 @@ class TerrestrialPlanet : public GenericObject {
         RadiativeBoundaryConditions bc;
         bc.incident_flux = stellar_flux;
         bc.zenith_angle = zenith_angle;
-        bc.surface_albedo = surface_albedo;
-        bc.surface_temperature = surface_temperature;
+        bc.surface_albedo = surface->getAlbedo();
+        bc.surface_temperature = surface->temperature;
         bc.has_surface = true;
-
+        
         // 5. Radiative transfer
         radiative_transfer->calculate(atmosphere, opacity, radiation_field, bc);
-
+        
         // 6. Flux divergence
         radiation_field.calcFluxDivergence(atmosphere.pressure);
-
+        
         // 7. Temperature correction (target_flux = 0: corrects all levels, no anchoring)
         temp_correction->calcCorrection(
           surface_gravity, atmosphere, radiation_field, opacity);
 
-        // 8. Update surface temperature from energy balance:
-        //    In equilibrium: (1-A) * F_down_surface = sigma * T_surf^4
-        const double F_down_surface = radiation_field.flux_down_total[0];
-        const double absorbed = (1.0 - surface_albedo) * F_down_surface;
-
-        // if (absorbed > 0)
-        //   surface_temperature = std::pow(absorbed / constants::stefan_boltzmann, 0.25);
-
-        surface_temperature += - radiation_field.flux_total.back()*1e3 * 1.0 / (50.* 4.18*1.e7);
+        // 8. Update surface temperature via surface model
+        surface->calcTemperature(radiation_field, 1000.0);
 
         shapiroFilter(atmosphere.temperature, 0.25);
 
@@ -256,7 +249,7 @@ class TerrestrialPlanet : public GenericObject {
             max_abs_dT_level = i;
           }
         }
-        
+
         const double flux_toa = radiation_field.flux_total.back()/radiation_field.flux_down_total.back();
         const int n_conv = std::count(
           atmosphere.convective.begin(), atmosphere.convective.end(), 1);
@@ -268,7 +261,7 @@ class TerrestrialPlanet : public GenericObject {
                   << "  " << std::setw(12) << std::scientific << std::setprecision(4) << flux_toa
                   << "  " << std::setw(8) << std::fixed << std::setprecision(0) << atmosphere.temperature[0]
                   << "  " << std::setw(8) << atmosphere.temperature.back()
-                  << "  " << std::setw(8) << std::setprecision(1) << surface_temperature
+                  << "  " << std::setw(8) << std::setprecision(1) << surface->temperature
                   << "  " << std::setw(6) << n_conv
                   << (ng_applied ? "  [Ng]" : "")
                   << "\n";
@@ -287,11 +280,10 @@ class TerrestrialPlanet : public GenericObject {
 
   private:
     double surface_gravity;
-    double surface_albedo;
     double zenith_angle;
-    double surface_temperature = 0;
     std::unique_ptr<StellarSpectrum> stellar_spectrum;
     std::vector<double> stellar_flux;
+    std::unique_ptr<GenericSurface> surface;
 
     std::vector<double> chemistry_parameters;
 
