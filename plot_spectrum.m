@@ -1,27 +1,33 @@
 clearvars;
 
-data = readmatrix("spectrum.dat");
+clearvars;
+
+% Load the data
+spectrum = ncread('output_terrestrial.nc', 'spectrum');
+wavelength = ncread('output_terrestrial.nc', 'wavelength');
 
 
-a = 30.09200; 
-b = 6.832514;
-c = 6.793435;
-d = -2.534480;
-e = 0.082139;
+figure;
 
-t = 200/1000.;
-molar_mass = 18.0153;
+semilogx(wavelength, spectrum);
 
-cp = a + b * t + c * t*t + d * t*t*t + e/(t*t);
-%cp = cp / molar_mass * 1e7;
+set(gca, 'FontSize', 13);
+set(gca,'TickLabelInterpreter','latex');
 
-% figure;
-% 
-% loglog(data(:,1), data(:,2),);
-% 
-% set(gca, 'FontSize', 13);
-% set(gca,'TickLabelInterpreter','latex');
-% 
-% 
-% xlabel("Wavelength ($\mu$m)",'Interpreter','latex');
-% ylabel("Flux (W m$^{-2}$ cm)",'Interpreter','latex');
+
+xlabel("Wavelength ($\mu$m)",'Interpreter','latex');
+ylabel("Flux (W m$^{-2}$ $\mu$m$^{-1}$)",'Interpreter','latex');
+
+
+figure;
+
+plot(wavelength, spectrum);
+
+xlim([2 20]);
+
+set(gca, 'FontSize', 13);
+set(gca,'TickLabelInterpreter','latex');
+
+
+xlabel("Wavelength ($\mu$m)",'Interpreter','latex');
+ylabel("Flux (W m$^{-2}$ $\mu$m$^{-1}$)",'Interpreter','latex');

@@ -38,6 +38,24 @@ class ThermodynamicData {
       const std::vector<double>& number_densities,
       double temperature);
 
+    // Saturation vapor pressure of H2O [bar]
+    // Murphy & Koop (2005, QJRMS 131:1539): liquid branch T > 273.15 K, ice branch T <= 273.15 K
+    static double saturationVaporPressure(double temperature);
+
+    // d(ln e_s)/dT [K^-1] — analytic derivative of Murphy & Koop formula
+    static double dLnSatVaporPressure_dT(double temperature);
+
+    // Latent heat of H2O [erg/g] from Clausius-Clapeyron applied to Murphy & Koop:
+    // L = dLnSatVaporPressure_dT * (R_gas / M_H2O) * T^2
+    static double latentHeat(double temperature);
+
+    // Moist adiabatic gradient d ln T / d ln P, using NDIV=10 sublevel integration.
+    // pressure in bar. Falls back to adiabaticGradient() when e_s >= pressure.
+    static double moistAdiabaticGradient(
+      const std::vector<double>& number_densities,
+      double temperature,
+      double pressure);
+
   private:
     static double evaluateCpOverR(const std::array<double, 7>& coeffs, double T);
     static bool isMonatomic(chemical_species_id species);

@@ -136,6 +136,7 @@ void DiscreteOrdinates::calcTotalTransportCoeff(
       * opacity.cloud_single_scattering[nu_index][j];
 
     const double total_tau_abs = gas_tau_abs + cloud_tau_abs;
+    
     const double total_tau_scat = gas_tau_scat + cloud_tau_scat;
     const double total_tau = total_tau_abs + total_tau_scat;
 
@@ -217,8 +218,10 @@ void DiscreteOrdinates::calculate(
     output.flux[j][nu_index] = output.flux_up[j][nu_index] - output.flux_down[j][nu_index];
     output.mean_intensity[j][nu_index] = results.mean_intensity[j_rev] * si_to_cgs;
   }
-
-  output.spectrum[nu_index] = output.flux_up.back()[nu_index];
+  
+  //convert from W m-2 cm to W m-2 micron-1
+  output.spectrum[nu_index] = output.flux_up.back()[nu_index] 
+    /spectral_grid->wavelength_list[nu_index]/spectral_grid->wavelength_list[nu_index]*10000.0;
 }
 
 

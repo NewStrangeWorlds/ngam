@@ -36,6 +36,7 @@
 #include "../temperature/time_stepping_lre_temperature.h"
 #include "../chemistry/select_chemistry.h"
 #include "../convection/dry_adiabatic.h"
+#include "../convection/moist_adiabatic.h"
 
 
 
@@ -63,6 +64,7 @@ class BrownDwarf : public GenericObject {
       double convergence_threshold_ = 1e-4,
       double iteration_gamma_ = 0.5,
       bool use_convective_adjustment_ = true,
+      std::string convection_type_ = "dry",
       size_t ng_interval_ = 10,
       double lre_fraction_ = 0.0,
       double min_convection_pressure_ = 1e-4,
@@ -92,7 +94,12 @@ class BrownDwarf : public GenericObject {
         max_change_per_iteration(max_change_per_iteration_)
     {
       if (use_convective_adjustment_)
-        convection = std::make_unique<DryAdiabaticAdjustment>(10, min_convection_pressure_);
+      {
+        if (convection_type_ == "moist")
+          convection = std::make_unique<MoistAdiabaticAdjustment>(10, min_convection_pressure_);
+        else
+          convection = std::make_unique<DryAdiabaticAdjustment>(10, min_convection_pressure_);
+      }
     }
     virtual ~BrownDwarf() {}
 

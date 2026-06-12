@@ -180,4 +180,102 @@ double ThermodynamicData::adiabaticGradient(
 }
 
 
+double ThermodynamicData::saturationVaporPressure(double T)
+{
+  double ln_e;
+
+  if (T <= 273.15)
+  {
+    // Murphy & Koop (2005) Eq. 7 — ice sublimation, valid 110-273.15 K
+    ln_e = 9.550426 - 5723.265/T + 3.53068*std::log(T) - 0.00728332*T;
+  }
+  else
+  {
+    // Murphy & Koop (2005) Eq. 10 — liquid water, valid 123-332 K
+    double th = std::tanh(0.0415 * (T - 218.8));
+    ln_e = 54.842763 - 6763.22/T - 4.210*std::log(T) + 0.000367*T
+         + th * (53.878 - 1331.22/T - 9.44523*std::log(T) + 0.014025*T);
+  }
+
+  // ln_e is ln(e_s / Pa); convert Pa -> bar
+  return std::exp(ln_e) * 1e-5;
+}
+
+
+double ThermodynamicData::dLnSatVaporPressure_dT(double T)
+{
+  if (T <= 273.15)
+  {
+    // Analytic derivative of Murphy & Koop Eq. 7
+    return 5723.265/(T*T) + 3.53068/T - 0.00728332;
+  }
+  else
+  {
+    // Analytic derivative of Murphy & Koop Eq. 10
+    double sech2 = 1.0 / std::cosh(0.0415 * (T - 218.8));
+    sech2 *= sech2;  // sech^2(x) = 1/cosh^2(x)
+
+    double inner    =  53.878 - 1331.22/T - 9.44523*std::log(T) + 0.014025*T;
+    double d_inner  =  1331.22/(T*T) - 9.44523/T + 0.014025;
+    double th       =  std::tanh(0.0415 * (T - 218.8));
+
+    return 6763.22/(T*T) - 4.210/T + 0.000367
+         + 0.0415 * sech2 * inner
+         + th * d_inner;
+  }
+}
+
+
+double ThermodynamicData::latentHeat(double T)
+{
+  // L = d(ln e_s)/dT * (R_gas / M_H2O) * T^2  [erg/g]
+  const double M_H2O = 18.015;  // g/mol
+  return dLnSatVaporPressure_dT(T) * (constants::gas_constant / M_H2O) * T * T;
+}
+
+
+double ThermodynamicData::moistAdiabaticGradient(
+  const std::vector<double>& number_densities,
+  double temperature,
+  double pressure)
+{
+  const double M_H2O = 18.015;
+  const double R     = constants::gas_constant;
+
+  double n_total = number_densities[_TOTAL];
+  if (n_total <= 0) return 0;
+
+  double cp_molar = 0;
+  double mu       = 0;
+  for (const auto& sp : constants::species_data)
+  {
+    if (sp.id == _TOTAL) continue;
+    double x_i = number_densities[sp.id] / n_total;
+    if (x_i <= 0) continue;
+    cp_molar += x_i * cpOverR(sp.id, temperature);
+    mu       += x_i * sp.molecular_weight;
+  }
+  if (cp_molar <= 0) return 0;
+
+  const double nabla_d = 1.0 / cp_molar;
+
+  const double e_s = saturationVaporPressure(temperature);
+  if (e_s >= pressure) return nabla_d;
+
+  // Standard moist adiabatic lapse rate (d ln T / d ln P):
+  //   nabla_m = nabla_d * (1 + L*w_s / (R_d*T)) / (1 + L^2*w_s / (c_pd*R_v*T^2))
+  const double L    = latentHeat(temperature);                  // erg/g
+  const double R_d  = R / mu;                                   // erg/(g·K)
+  const double R_v  = R / M_H2O;                                // erg/(g·K)
+  const double c_pd = cp_molar * R_d;                           // erg/(g·K)
+  const double w_s  = (M_H2O / mu) * e_s / (pressure - e_s);   // mass mixing ratio
+
+  const double num = 1.0 + L * w_s / (R_d * temperature);
+  const double den = 1.0 + (L * L * w_s) / (c_pd * R_v * temperature * temperature);
+
+  if (den <= 0) return nabla_d;
+  return nabla_d * num / den;
+}
+
+
 }

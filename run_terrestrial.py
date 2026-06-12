@@ -14,9 +14,10 @@ opacity_species = [
     ("N2",         "Rayleigh"),
     ("O2",         "Rayleigh"),
     ("O3",         "Molecules/16O3__HITRAN2020_e2b"),
-    ("H2O",        "Molecules/1H2-16O__POKAZATEL_e2b"),
+    ("O3",         "Molecules/O3_visible_HITRAN"),
+    ("H2O",        "Molecules/H2O_HITRAN_cut25"),
     ("CH4",        "Molecules/12C-1H4__YT34to10_e2b"),
-    ("N2O",        "Molecules/14N2-16O__HITEMP2019_e2b"),
+    #("N2O",        "Molecules/14N2-16O__HITEMP2019_e2b"),
     ("CO2",        "Molecules/12C-16O2__CDSD_4000_e2b"),
     #("CO2-CIA",    "none"),
     ("H2O-CIA",    "none")
@@ -32,7 +33,7 @@ species_folders = [s[1] for s in opacity_species]
 grid = pyngam.SpectralGrid(
     opacity_data_path, "",
     2, 10000.0,
-    0.3, 100.0)
+    0.15, 100.0)
 
 # Chemistry: isoprofile with prescribed mixing ratios.
 # The chemistry_parameters vector contains the volume mixing ratios
@@ -64,7 +65,10 @@ model = pyngam.TerrestrialPlanet(
     opacity_species_symbol=species_symbols,
     opacity_species_folder=species_folders,
     use_clouds=False,
-    chemistry=[("fixed", ["data/Earth/earth_standard_composition.dat"])],
+    chemistry=[
+        ("fixed", ["data/Earth/earth_standard_composition.dat"]),
+        ("manabe_wetherald", []),   # overrides H2O with RH profile (RH0=0.77)
+    ],
     rt_type="disort",
     rt_params=["4"],
     surface_gravity=980.0,       # cm/s^2 (~ Earth)
@@ -77,11 +81,41 @@ model = pyngam.TerrestrialPlanet(
     chemistry_parameters=mix_ratios,
     max_iterations=2000,
     convergence_threshold=1e-5,
-    iteration_gamma=0.1,
+    iteration_gamma=0.2,
+    lre_fraction=0.5,
     use_convective_adjustment=True,
+    convection_type="moist",
     ng_interval=0,
     max_change_per_iteration=0.1)
 
+# model = pyngam.TerrestrialPlanet(
+#     spectral_grid=grid,
+#     nb_grid_points=100,
+#     atmos_boundary_pressures=[1, 1e-6],
+#     cross_section_file_path=opacity_data_path,
+#     opacity_species_symbol=species_symbols,
+#     opacity_species_folder=species_folders,
+#     use_clouds=False,
+#     chemistry=[("fixed", ["data/Earth/earth_standard_composition.dat"])],
+#     rt_type="disort",
+#     rt_params=["4"],
+#     surface_gravity=980.0,       # cm/s^2 (~ Earth)
+#     zenith_angle=0.5,            # cos(60 deg) = global average approximation
+#     stellar_type="tabulated",
+#     stellar_params=["data/stellar_spectra/spectrum_sun.dat"],   # stellar temperature in K (Sun)
+#     instellation=1361e3*0.5,     # erg/cm^2/s (solar constant: 1361 W/m^2 * 1e3, 0.5 for fast rotator)
+#     surface_type="simple",       # variable: albedo from file
+#     surface_params=["0.3", "2.0"],  #albedo file
+#     chemistry_parameters=mix_ratios,
+#     max_iterations=2000,
+#     convergence_threshold=1e-5,
+#     iteration_gamma=0.2,
+#     lre_fraction=0.5,
+#     use_convective_adjustment=True,
+#     min_convection_pressure=1e-3,
+#     convection_type="moist",
+#     ng_interval=0,
+#     max_change_per_iteration=0.1)
 
 # --- Initialize ---
 

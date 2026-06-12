@@ -27,6 +27,7 @@
 #include "fastchem_chemistry.h"
 #include "isoprofile_chemistry.h"
 #include "fixed_chemistry.h"
+#include "mw_humidity_chemistry.h"
 
 #include "../additional/exceptions.h"
 
@@ -41,9 +42,9 @@ namespace ngam {
 //definition of the different chemistry modules with an
 //identifier, a keyword to be located in the config file and a short version of the keyword
 namespace chemistry_modules{
-  enum id {iso, eq, fixed};
-  const std::vector<std::string> description {"isoprofile", "equilibrium", "fixed"};
-  const std::vector<std::string> description_short {"iso", "eq", "fix"};
+  enum id {iso, eq, fixed, mw_humidity};
+  const std::vector<std::string> description {"isoprofile", "equilibrium", "fixed", "manabe_wetherald"};
+  const std::vector<std::string> description_short {"iso", "eq", "fix", "mw"};
 }
 
 
@@ -103,6 +104,13 @@ inline std::unique_ptr<Chemistry> selectChemistryModule(
         std::string error_message = "Fixed chemistry requires exactly one parameter!\n";
         throw InvalidInput(std::string ("forward_model.config"), error_message);}
     return std::make_unique<FixedChemistry>(parameters[0]);
+  }
+
+  if (module_id == chemistry_modules::mw_humidity)
+  {
+    double rh0 = 0.77;
+    if (!parameters.empty()) rh0 = std::stod(parameters[0]);
+    return std::make_unique<ManabeWetherlandChemistry>(rh0);
   }
 
   //we should never reach this point

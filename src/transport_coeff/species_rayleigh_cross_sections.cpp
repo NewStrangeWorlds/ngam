@@ -65,7 +65,7 @@ bool GasHeRayleigh::calcRayleighCrossSections(std::vector<double>& cross_section
         / (1.5342e10 - spectral_grid->wavenumber_list[j]*spectral_grid->wavenumber_list[j])) * 1e-8 + 1;
       double reference_density = 2.546899e19; //molecules cm^-3
 
-      cross_sections[j] = generalRayleighCrossSection(
+      rayleigh_cross_sections[j] = generalRayleighCrossSection(
         reference_density,
         refractive_index, 
         king_correction_factor, 
@@ -96,7 +96,7 @@ bool GasHRayleigh::calcRayleighCrossSections(std::vector<double>& cross_sections
       const double lambda_lyman = 0.0912; //wavelength of the Lyman limit in micron
       const double lambda_fraction = lambda_lyman / spectral_grid->wavelength_list[i];
 
-      cross_sections[i] = 8.41e-25 * std::pow(lambda_fraction, 4) 
+      rayleigh_cross_sections[i] = 8.41e-25 * std::pow(lambda_fraction, 4) 
                         + 3.37e-24 * std::pow(lambda_fraction, 6) 
                         + 4.71e-22 * std::pow(lambda_fraction, 14); //in cm2
     }
@@ -128,7 +128,7 @@ bool GasCORayleigh::calcRayleighCrossSections(std::vector<double>& cross_section
       
       double refractive_index = (22851. + 0.456e14 / (71427.0*71427.0 - spectral_grid->wavenumber_list[j]*spectral_grid->wavenumber_list[j])) * 1e-8 + 1;
 
-      cross_sections[j] = generalRayleighCrossSection(
+      rayleigh_cross_sections[j] = generalRayleighCrossSection(
         reference_density, 
         refractive_index, 
         king_correction_factor, 
@@ -167,7 +167,7 @@ bool GasCO2Rayleigh::calcRayleighCrossSections(std::vector<double>& cross_sectio
                                 + 0.1218145e-6 / (2418.136*2418.136 - spectral_grid->wavenumber_list[j]*spectral_grid->wavenumber_list[j]))
                                 * 1.1427e3 + 1.0;
 
-      cross_sections[j] = generalRayleighCrossSection(
+      rayleigh_cross_sections[j] = generalRayleighCrossSection(
         reference_density, 
         refractive_index, 
         king_correction_factor, 
@@ -200,7 +200,7 @@ bool GasCH4Rayleigh::calcRayleighCrossSections(std::vector<double>& cross_sectio
 
       double refractive_index = (46662. + 4.02e-6 * spectral_grid->wavenumber_list[j]*spectral_grid->wavenumber_list[j]) * 1e-8 + 1;
 
-      cross_sections[j] = generalRayleighCrossSection(
+      rayleigh_cross_sections[j] = generalRayleighCrossSection(
         reference_density, 
         refractive_index, 
         king_correction_factor, 
@@ -260,7 +260,7 @@ bool GasH2ORayleigh::calcRayleighCrossSections(std::vector<double>& cross_sectio
       double refractive_index = std::pow(((2 * a_factor + 1)/(1 - a_factor)), 0.5);
 
 
-      cross_sections[j] = generalRayleighCrossSection(
+      rayleigh_cross_sections[j] = generalRayleighCrossSection(
         reference_density, 
         refractive_index, 
         king_correction_factor, 
@@ -284,7 +284,7 @@ bool GasN2Rayleigh::calcRayleighCrossSections(std::vector<double>& cross_section
     rayleigh_cross_sections.assign(nb_spectral_points, 0.0);
   
     double reference_density = 2.546899e19; //molecules cm^-3
-
+    
     #pragma omp parallel for
     for (unsigned int j=0; j<nb_spectral_points; j++)
     {
@@ -302,14 +302,14 @@ bool GasN2Rayleigh::calcRayleighCrossSections(std::vector<double>& cross_section
 
       refractive_index = refractive_index * 1e-8 + 1.0;
 
-      cross_sections[j] = generalRayleighCrossSection(
+      rayleigh_cross_sections[j] = generalRayleighCrossSection(
         reference_density, 
         refractive_index, 
         king_correction_factor, 
         spectral_grid->wavenumber_list[j]);
     }
   }
-
+  
   cross_sections = rayleigh_cross_sections;
 
   return true;
@@ -340,7 +340,7 @@ bool GasO2Rayleigh::calcRayleighCrossSections(std::vector<double>& cross_section
 
       refractive_index = refractive_index * 1e-8 + 1.0;
 
-      cross_sections[j] = generalRayleighCrossSection(
+      rayleigh_cross_sections[j] = generalRayleighCrossSection(
         reference_density, 
         refractive_index, 
         king_correction_factor, 
