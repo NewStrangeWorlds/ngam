@@ -42,6 +42,19 @@ class SpectralGrid{
       double spectral_resolution_,
       double wavelength_min,
       double wavelength_max);
+    SpectralGrid(
+      const std::string& cross_section_file_path_,
+      const std::string& wavenumber_file_path_,
+      unsigned int spectral_discretisation_,
+      double spectral_resolution_,
+      double wavelength_min,
+      double wavelength_max,
+      double cov_temperature_min_,
+      double cov_temperature_max_,
+      unsigned int cov_nb_temperatures_,
+      size_t target_nb_points_,
+      double cov_stellar_temperature_,
+      size_t target_nb_points_stellar_);
     ~SpectralGrid();
 
     std::vector<double> wavenumber_list;      //wavenumber list used to calculate the high-res spectra
@@ -102,6 +115,14 @@ class SpectralGrid{
     unsigned int spectral_discretisation;
     double spectral_resolution;
 
+    //parameters for the composite-Planck covering distribution (spectral_discretisation == 3)
+    double cov_temperature_min = 0.0;       //lower bound of the atmospheric covering temperature range
+    double cov_temperature_max = 0.0;       //upper bound of the atmospheric covering temperature range
+    unsigned int cov_nb_temperatures = 0;   //number of covering temperatures (0 -> internal ~500 K-step default)
+    size_t target_nb_points = 0;            //desired number of points for the thermal (atmospheric) covering
+    double cov_stellar_temperature = 0.0;   //host-star temperature for the stellar covering term (<= 0 -> omitted)
+    size_t target_nb_points_stellar = 0;    //desired number of points for the stellar irradiation covering
+
     std::vector<double> wavenumber_list_full; //the full, global wavenumber list, the opacities have been calculated at
     std::vector<double> wavelength_list_full; //the full, global wavelength list, the opacities have been calculated at
 
@@ -122,6 +143,24 @@ class SpectralGrid{
       std::vector<int>& included_points);
     void createHighResGridConstResolution(
       const std::vector<std::vector<size_t>>& edge_indices,
+      std::vector<int>& included_points);
+    void createHighResGridPlanckCovering(
+      const std::vector<std::vector<size_t>>& edge_indices,
+      std::vector<int>& included_points);
+
+    std::vector<double> coveringTemperatures() const;
+    std::vector<double> computeCoveringCurve(
+      const std::vector<std::vector<size_t>>& edge_indices,
+      const std::vector<double>& temperatures) const;
+    void selectByCovering(
+      const std::vector<std::vector<size_t>>& edge_indices,
+      const std::vector<double>& covering,
+      const size_t target_points,
+      std::vector<int>& included_points);
+    size_t markCovering(
+      const std::vector<std::vector<size_t>>& edge_indices,
+      const std::vector<double>& covering,
+      const double threshold,
       std::vector<int>& included_points);
 
     size_t findClosestIndexDesc(

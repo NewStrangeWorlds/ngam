@@ -6,4 +6,6 @@ build/*
 CMakeFiles/*
 .vscode/
 
+prototyping/*
+
 _deps/*

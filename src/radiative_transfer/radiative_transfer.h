@@ -50,6 +50,14 @@ struct RadiativeTransferOutput {
     flux_up.assign(nb_grid_points, std::vector<double>(nb_spectral_points, 0.0));
     flux_down.assign(nb_grid_points, std::vector<double>(nb_spectral_points, 0.0));
     mean_intensity.assign(nb_grid_points, std::vector<double>(nb_spectral_points, 0.0));
+
+    flux_net_thermal_total.assign(nb_grid_points, 0.0);
+    flux_net_thermal.assign(nb_grid_points, std::vector<double>(nb_spectral_points, 0.0));
+
+    net_heating.assign(nb_grid_points, 0.0);
+    net_heating_jacobian.assign(nb_grid_points, std::vector<double>(nb_grid_points, 0.0));
+    net_flux_jacobian.assign(nb_grid_points, std::vector<double>(nb_grid_points, 0.0));
+    meanint_kappa_jacobian.assign(nb_grid_points, std::vector<double>(nb_grid_points, 0.0));
   }
 
   void integrateQuantities()
@@ -69,6 +77,9 @@ struct RadiativeTransferOutput {
 
       mean_intensity_total[i] = aux::quadratureTrapezoidal(
         spectral_grid->wavenumber_list, mean_intensity[i]);
+
+      flux_net_thermal_total[i] = aux::quadratureTrapezoidal(
+        spectral_grid->wavenumber_list, flux_net_thermal[i]);
     }
   }
 
@@ -96,6 +107,33 @@ struct RadiativeTransferOutput {
 
   SpectralGrid* spectral_grid = nullptr;
 
+  // When true, the radiative-transfer backend also fills the frequency-integrated
+  // temperature Jacobians below (only the DISORT backend supports this). Set by the
+  // linearised temperature correction before calling RadiativeTransfer::calculate.
+  bool compute_jacobian = false;
+
+  // Frequency-integrated net radiative heating and temperature Jacobians, ngam grid
+  // indexing ([i] / [i][j], 0 = bottom). DISORT's own flux divergence is used (rather than
+  // a kappa*(J-B) reconstruction) so that net_heating = 0 is exactly equivalent to a
+  // constant DISORT net flux -- avoiding the J/flux stencil mismatch.
+  //   net_heating[i]            = sum_nu w_nu * dF_net/dtau(nu,i)        (heating rate, cgs)
+  //   net_heating_jacobian[i][j]= sum_nu w_nu * d(dF_net/dtau)(nu,i)/dT_j
+  //   net_flux_jacobian[i][j]   = sum_nu w_nu * d(F_up - F_down)(nu,i)/dT_j  (flux anchor)
+  // The derivative w.r.t. the deep/surface boundary temperature is folded into j = 0
+  // (the bottom grid point), since temperature_bottom tracks atmosphere.temperature[0].
+  //
+  // kappa-weighted mean-intensity Jacobian for the ratio-form local-RE residual
+  // g_i = (sum_nu w_nu kappa_nu,i J_nu,i)/(sum_nu w_nu kappa_nu,i B_nu,i) - 1. Its
+  // numerator derivative (opacity frozen) is exactly this contraction:
+  //   meanint_kappa_jacobian[i][j] = sum_nu w_nu * kappa_nu,i * d(mean_intensity)(nu,i)/dT_j
+  // (cgs). The kappa weighting matches the residual's numerator/denominator so that
+  // kappa cancels in the diagonal (the property that keeps the ratio Newton conditioned
+  // as kappa->0). The 1/den_i row scaling is applied by the corrector, not here.
+  std::vector<double> net_heating;
+  std::vector< std::vector<double> > net_heating_jacobian;
+  std::vector< std::vector<double> > net_flux_jacobian;
+  std::vector< std::vector<double> > meanint_kappa_jacobian;
+
   std::vector<double> spectrum;
 
   std::vector<double> flux_total;
@@ -108,6 +146,15 @@ struct RadiativeTransferOutput {
   std::vector< std::vector<double> > flux_up;
   std::vector< std::vector<double> > flux_down;
   std::vector< std::vector<double> > mean_intensity;
+
+  // Thermal (longwave/IR, Planck-source-driven) NET upward flux per level. The adding-doubling backend
+  // splits the net flux into thermal + stellar parts (net_flux_thermal + net_flux_stellar = flux_total);
+  // the THERMAL part is the diffusion flux F = -(4/3 kappa) d(sigma T^4)/dz that carries the greenhouse /
+  // internal flux through the optically-thick deep, and is the F_star the deep gradient integration needs
+  // (the total net flux -> 0 for a terrestrial planet, so it cannot be used). Filled only by the adding-
+  // doubling backend (empty / zero otherwise).
+  std::vector<double> flux_net_thermal_total;
+  std::vector< std::vector<double> > flux_net_thermal;
 };
 
 

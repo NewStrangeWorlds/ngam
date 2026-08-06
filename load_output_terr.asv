@@ -1,13 +1,13 @@
 clearvars;
 
-file_name = 'output_terrestrial.nc';
+file_name = 'output_terrestrial_no_convection.nc';
 
 % Load the data
 T   = ncread(file_name, 'temperature');
 P   = ncread(file_name, 'pressure');
 conv = ncread(file_name, 'convective');
 flux_div = ncread(file_name, 'flux_total');
-flux_tot = ncread(file_name, 'flux_total');
+flux_tot = ncread('output_terrestrial.nc', 'flux_total');
 
 % Split into radiative and convective
 rad  = conv == 0;
@@ -25,9 +25,9 @@ cnv  = conv == 1;
 %If you want connected line segments coloured by zone instead of dots, you can loop over contiguous regions:
 
 
-T    = ncread(file_name, 'temperature');
-P    = ncread(file_name, 'pressure');
-conv = ncread(file_name, 'convective');
+T    = ncread('output_terrestrial.nc', 'temperature');
+P    = ncread('output_terrestrial.nc', 'pressure');
+conv = ncread('output_terrestrial.nc', 'convective');
 
 figure; hold on
 
@@ -74,7 +74,7 @@ target = 5.6704e+03 * 0.001;
 
 figure;
 
-loglog(abs(flux_tot).*0.001, P);
+loglog(flux_tot.*0.001, P);
 set(gca, 'YScale', 'log', 'YDir', 'reverse')
 xlabel('Flux ')
 ylabel('Pressure [bar]')

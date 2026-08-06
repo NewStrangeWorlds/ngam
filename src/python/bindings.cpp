@@ -10,6 +10,7 @@
 #include "../radiative_transfer/select_radiative_transfer.h"
 #include "../object/brown_dwarf.h"
 #include "../object/terrestrial_planet.h"
+#include "../object/gas_planet.h"
 #include "../stellar/stellar_spectrum.h"
 #include "../surface/select_surface.h"
 
@@ -45,7 +46,8 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
     size_t ng_interval,
     double lre_fraction,
     double min_convection_pressure,
-    double max_change_per_iteration)
+    double max_change_per_iteration,
+    bool use_linearisation)
 {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     for (auto& [type, params] : chemistry_configs)
@@ -78,7 +80,8 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
         ng_interval,
         lre_fraction,
         min_convection_pressure,
-        max_change_per_iteration);
+        max_change_per_iteration,
+        use_linearisation);
 }
 
 
@@ -109,7 +112,8 @@ static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
     size_t ng_interval,
     double lre_fraction,
     double min_convection_pressure,
-    double max_change_per_iteration)
+    double max_change_per_iteration,
+    bool use_linearisation)
 {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     for (auto& [type, params] : chemistry_configs)
@@ -171,7 +175,104 @@ static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
         ng_interval,
         lre_fraction,
         min_convection_pressure,
-        max_change_per_iteration);
+        max_change_per_iteration,
+        use_linearisation);
+}
+
+
+static std::unique_ptr<GasPlanet> make_gas_planet(
+    SpectralGrid& spectral_grid,
+    size_t nb_grid_points,
+    const std::vector<double>& atmos_boundary_pressures,
+    const std::string& cross_section_file_path,
+    const std::vector<std::string>& opacity_species_symbol,
+    const std::vector<std::string>& opacity_species_folder,
+    bool use_clouds,
+    const std::vector<std::pair<std::string, std::vector<std::string>>>& chemistry_configs,
+    const std::string& rt_type,
+    const std::vector<std::string>& rt_params,
+    double surface_gravity,
+    double internal_temperature,
+    double zenith_angle,
+    const std::string& stellar_type,
+    const std::vector<std::string>& stellar_params,
+    double instellation,
+    const std::vector<double>& chemistry_parameters,
+    double bottom_radius,
+    bool use_variable_gravity,
+    size_t max_iterations,
+    double convergence_threshold,
+    double iteration_gamma,
+    bool use_convective_adjustment,
+    std::string convection_type,
+    size_t ng_interval,
+    double lre_fraction,
+    double min_convection_pressure,
+    double max_change_per_iteration,
+    bool use_linearisation)
+{
+    std::vector<std::unique_ptr<Chemistry>> chemistry;
+    for (auto& [type, params] : chemistry_configs)
+        chemistry.push_back(selectChemistryModule(type, params));
+
+    auto rt = selectRadiativeTransfer(
+        rt_type, rt_params, nb_grid_points, &spectral_grid);
+
+    std::unique_ptr<StellarSpectrum> star;
+
+    if (stellar_type == "blackbody")
+    {
+      if (stellar_params.empty())
+        throw std::runtime_error(
+          "Blackbody stellar spectrum requires one parameter "
+          "(stellar temperature in K)");
+
+      double stellar_temperature = std::stod(stellar_params[0]);
+      star = std::make_unique<BlackbodyStar>(stellar_temperature, instellation);
+    }
+    else if (stellar_type == "tabulated")
+    {
+      if (stellar_params.empty())
+        throw std::runtime_error(
+          "Tabulated stellar spectrum requires one parameter "
+          "(path to spectrum file)");
+
+      star = std::make_unique<TabulatedStar>(stellar_params[0], instellation);
+    }
+    else
+    {
+      throw std::runtime_error(
+        "Unknown stellar spectrum type: " + stellar_type
+        + ". Supported: blackbody, tabulated");
+    }
+
+    return std::make_unique<GasPlanet>(
+        &spectral_grid,
+        nb_grid_points,
+        atmos_boundary_pressures,
+        cross_section_file_path,
+        opacity_species_symbol,
+        opacity_species_folder,
+        use_clouds,
+        std::move(chemistry),
+        std::move(rt),
+        surface_gravity,
+        internal_temperature,
+        zenith_angle,
+        std::move(star),
+        chemistry_parameters,
+        bottom_radius,
+        use_variable_gravity,
+        max_iterations,
+        convergence_threshold,
+        iteration_gamma,
+        use_convective_adjustment,
+        convection_type,
+        ng_interval,
+        lre_fraction,
+        min_convection_pressure,
+        max_change_per_iteration,
+        use_linearisation);
 }
 
 
@@ -215,6 +316,31 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("spectral_resolution"),
             py::arg("wavelength_min"),
             py::arg("wavelength_max"))
+        .def(py::init<
+            const std::string&,
+            const std::string&,
+            unsigned int,
+            double,
+            double,
+            double,
+            double,
+            double,
+            unsigned int,
+            size_t,
+            double,
+            size_t>(),
+            py::arg("cross_section_file_path"),
+            py::arg("wavenumber_file_path"),
+            py::arg("spectral_discretisation"),
+            py::arg("spectral_resolution"),
+            py::arg("wavelength_min"),
+            py::arg("wavelength_max"),
+            py::arg("cov_temperature_min"),
+            py::arg("cov_temperature_max"),
+            py::arg("cov_nb_temperatures"),
+            py::arg("target_nb_points"),
+            py::arg("cov_stellar_temperature"),
+            py::arg("target_nb_points_stellar"))
         .def_readonly("wavenumber_list", &SpectralGrid::wavenumber_list)
         .def_readonly("wavelength_list", &SpectralGrid::wavelength_list)
         .def_readonly("nb_spectral_points", &SpectralGrid::nb_spectral_points)
@@ -247,7 +373,10 @@ PYBIND11_MODULE(pyngam, m) {
         .def_readonly("flux_up", &RadiativeTransferOutput::flux_up)
         .def_readonly("flux_down", &RadiativeTransferOutput::flux_down)
         .def_readonly("mean_intensity", &RadiativeTransferOutput::mean_intensity)
-        .def_readonly("flux_divergence", &RadiativeTransferOutput::flux_divergence);
+        .def_readonly("flux_divergence", &RadiativeTransferOutput::flux_divergence)
+        .def_readonly("net_heating", &RadiativeTransferOutput::net_heating)
+        .def_readonly("net_flux_jacobian", &RadiativeTransferOutput::net_flux_jacobian)
+        .def_readonly("net_heating_jacobian", &RadiativeTransferOutput::net_heating_jacobian);
 
     // ---- BrownDwarf ----
     py::class_<BrownDwarf>(m, "BrownDwarf")
@@ -277,6 +406,7 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("lre_fraction") = 0.0,
             py::arg("min_convection_pressure") = 1e-4,
             py::arg("max_change_per_iteration") = 0.1,
+            py::arg("use_linearisation") = false,
             py::keep_alive<1, 2>())
         .def("initialize", &BrownDwarf::initialize,
             py::arg("temperature_type"),
@@ -324,6 +454,7 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("lre_fraction") = 0.0,
             py::arg("min_convection_pressure") = 1e-4,
             py::arg("max_change_per_iteration") = 0.1,
+            py::arg("use_linearisation") = false,
             py::keep_alive<1, 2>())
         .def("initialize", &TerrestrialPlanet::initialize,
             py::arg("temperature_type"),
@@ -337,8 +468,61 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("number_densities"),
             py::arg("mean_molecular_weight"),
             "Initialize from saved temperature, number densities, and mean molecular weight arrays")
+        .def("eval_forward", &TerrestrialPlanet::evalForward,
+            py::arg("temperature"), py::arg("compute_jac"), py::arg("recompute_opacity") = true,
+            "Diagnostic: one forward solve at the given T; returns net flux per level. With "
+            "compute_jac, also fills radiation_field.net_flux_jacobian / net_heating_jacobian.")
         .def("compute", &TerrestrialPlanet::computeAtmosphericStructure)
         .def_readonly("radiation_field", &TerrestrialPlanet::radiation_field)
         .def_property_readonly("atmosphere", &TerrestrialPlanet::getAtmosphere)
         .def_property_readonly("surface_temperature", &TerrestrialPlanet::getSurfaceTemperature);
+
+    // ---- GasPlanet ----
+    py::class_<GasPlanet>(m, "GasPlanet")
+        .def(py::init(&make_gas_planet),
+            py::arg("spectral_grid"),
+            py::arg("nb_grid_points"),
+            py::arg("atmos_boundary_pressures"),
+            py::arg("cross_section_file_path"),
+            py::arg("opacity_species_symbol"),
+            py::arg("opacity_species_folder"),
+            py::arg("use_clouds"),
+            py::arg("chemistry"),
+            py::arg("rt_type"),
+            py::arg("rt_params"),
+            py::arg("surface_gravity"),
+            py::arg("internal_temperature"),
+            py::arg("zenith_angle"),
+            py::arg("stellar_type"),
+            py::arg("stellar_params"),
+            py::arg("instellation"),
+            py::arg("chemistry_parameters"),
+            py::arg("bottom_radius") = 0.0,
+            py::arg("use_variable_gravity") = false,
+            py::arg("max_iterations") = 100,
+            py::arg("convergence_threshold") = 1e-4,
+            py::arg("iteration_gamma") = 0.5,
+            py::arg("use_convective_adjustment") = true,
+            py::arg("convection_type") = "dry",
+            py::arg("ng_interval") = 10,
+            py::arg("lre_fraction") = 0.0,
+            py::arg("min_convection_pressure") = 1e-4,
+            py::arg("max_change_per_iteration") = 0.1,
+            py::arg("use_linearisation") = false,
+            py::keep_alive<1, 2>())
+        .def("initialize", &GasPlanet::initialize,
+            py::arg("temperature_type"),
+            py::arg("temperature_config"),
+            py::arg("temperature_parameters"),
+            py::arg("init_chemistry"),
+            py::arg("init_chemistry_parameters"),
+            "Initialize from analytic temperature profile and chemistry")
+        .def("initialize_from_arrays", &GasPlanet::initializeFromArrays,
+            py::arg("temperature"),
+            py::arg("number_densities"),
+            py::arg("mean_molecular_weight"),
+            "Initialize from saved temperature, number densities, and mean molecular weight arrays")
+        .def("compute", &GasPlanet::computeAtmosphericStructure)
+        .def_readonly("radiation_field", &GasPlanet::radiation_field)
+        .def_property_readonly("atmosphere", &GasPlanet::getAtmosphere);
 }

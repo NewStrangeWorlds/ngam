@@ -1,32 +1,12 @@
-/*
-* This file is part of the BeAR code (https://github.com/newstrangeworlds/BeAR).
-* Copyright (C) 2024 Daniel Kitzmann
-*
-* BeAR is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* BeAR is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
-*
-* You find a copy of the GNU General Public License in the main
-* BeAR directory under <LICENSE>. If not, see
-* <http://www.gnu.org/licenses/>.
-*/
-
-
-#ifndef BROWN_DWARF_H
-#define BROWN_DWARF_H
-
+#ifndef GAS_PLANET_H
+#define GAS_PLANET_H
 
 #include <vector>
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <iomanip>
+#include <memory>
 
 #include "generic_object.h"
 #include "../additional/physical_const.h"
@@ -38,14 +18,26 @@
 #include "../chemistry/select_chemistry.h"
 #include "../convection/dry_adiabatic.h"
 #include "../convection/moist_adiabatic.h"
+#include "../stellar/stellar_spectrum.h"
 
 
+namespace ngam {
 
-namespace ngam{
 
-class BrownDwarf : public GenericObject {
+// Gas (giant) planet forward model.
+//
+// A combination of the brown dwarf and terrestrial planet models: an
+// illuminated, semi-infinite atmosphere *without* a surface.
+//   - Like the terrestrial planet, the top of the atmosphere is illuminated
+//     by an incident stellar beam (incident_flux + zenith_angle).
+//   - Like the brown dwarf, there is no surface. The lower boundary is the
+//     diffusion (semi-infinite) condition and an internal heat flux escapes
+//     from below, set by the internal temperature via
+//     target_flux = sigma * T_int^4. The deep atmosphere temperature is
+//     anchored to this internal flux.
+class GasPlanet : public GenericObject {
   public:
-    BrownDwarf(
+    GasPlanet(
       SpectralGrid* spectral_grid,
       size_t nb_grid_points,
       const std::vector<double>& atmos_boundary_pressures,
@@ -56,11 +48,12 @@ class BrownDwarf : public GenericObject {
       std::vector<std::unique_ptr<Chemistry>> chemistry,
       std::unique_ptr<RadiativeTransfer> radiative_transfer,
       double surface_gravity_,
-      double effective_temperature_,
-      double metallicity_,
-      double c_to_o_ratio_,
-      double bottom_radius_,
-      bool use_variable_gravity_,
+      double internal_temperature_,
+      double zenith_angle_,
+      std::unique_ptr<StellarSpectrum> stellar_spectrum_,
+      const std::vector<double>& chemistry_parameters_,
+      double bottom_radius_ = 0.0,
+      bool use_variable_gravity_ = false,
       size_t max_iterations_ = 100,
       double convergence_threshold_ = 1e-4,
       double iteration_gamma_ = 0.5,
@@ -82,10 +75,11 @@ class BrownDwarf : public GenericObject {
           std::move(chemistry),
           std::move(radiative_transfer)),
         surface_gravity(surface_gravity_),
-        effective_temperature(effective_temperature_),
-        metallicity(metallicity_),
-        c_to_o_ratio(c_to_o_ratio_),
-        target_flux(constants::stefan_boltzmann * std::pow(effective_temperature_, 4)),
+        internal_temperature(internal_temperature_),
+        target_flux(constants::stefan_boltzmann * std::pow(internal_temperature_, 4)),
+        zenith_angle(zenith_angle_),
+        stellar_spectrum(std::move(stellar_spectrum_)),
+        chemistry_parameters(chemistry_parameters_),
         bottom_radius(bottom_radius_),
         use_variable_gravity(use_variable_gravity_),
         max_iterations(max_iterations_),
@@ -96,6 +90,9 @@ class BrownDwarf : public GenericObject {
         max_change_per_iteration(max_change_per_iteration_),
         use_linearisation(use_linearisation_)
     {
+      // precompute stellar flux per wavenumber
+      stellar_flux = stellar_spectrum->calcFlux(spectral_grid->wavenumber_list);
+
       if (use_convective_adjustment_)
       {
         if (convection_type_ == "moist")
@@ -104,7 +101,7 @@ class BrownDwarf : public GenericObject {
           convection = std::make_unique<DryAdiabaticAdjustment>(10, min_convection_pressure_);
       }
     }
-    virtual ~BrownDwarf() {}
+    virtual ~GasPlanet() {}
 
     // Profile-based initialization
     void initialize(
@@ -114,9 +111,9 @@ class BrownDwarf : public GenericObject {
       const std::vector<std::pair<std::string, std::vector<std::string>>>& init_chemistry_configs,
       const std::vector<double>& init_chemistry_parameters)
     {
-      // 1. Create and apply temperature profile
       auto temp_profile = selectTemperatureProfile(temperature_type, temperature_config);
 
+      // the internal flux sets the deep temperature for analytic (e.g. Milne) profiles
       auto init_params = temperature_parameters;
       if (init_params.size() < 3)
         init_params.resize(3);
@@ -124,7 +121,7 @@ class BrownDwarf : public GenericObject {
 
       temp_profile->calcProfile(init_params, surface_gravity, atmosphere);
 
-      // 2. Create init chemistry modules and compute chemical composition
+      // create init chemistry modules and compute chemical composition
       std::vector<std::unique_ptr<Chemistry>> init_chemistry;
       for (auto& [type, params] : init_chemistry_configs)
         init_chemistry.push_back(selectChemistryModule(type, params));
@@ -145,7 +142,6 @@ class BrownDwarf : public GenericObject {
           atmosphere.mean_molecular_weight);
       }
 
-      // 3. Compute atmosphere structure from the initialized state
       atmosphere.calcAtmosphereStructure(
         surface_gravity, bottom_radius, use_variable_gravity);
 
@@ -171,11 +167,14 @@ class BrownDwarf : public GenericObject {
 
     bool computeAtmosphericStructure() override
     {
-      // time-stepping correction (dynamic mode: dt <= 0)
-      // optionally with opacity-weighted LRE correction
+      // target_flux = sigma * T_int^4 (> 0): the internal heat flux escaping
+      // through the semi-infinite lower boundary. With target_flux > 0 the
+      // temperature correction anchors the deep atmosphere to this flux,
+      // exactly as for the brown dwarf.
       std::unique_ptr<TemperatureCorrection> temp_correction;
       if (use_linearisation)
-        // full Newton step (relaxation = 1); the per-iteration cap is the safeguard.
+        // full Newton step (relaxation = 1) on the flux-constancy residual; the
+        // per-iteration cap below provides the safeguard far from equilibrium.
         temp_correction = std::make_unique<LinearisedTemperatureCorrection>(
           target_flux, 1.0, 1.0, max_change_per_iteration, convection.get());
       else if (lre_fraction > 0)
@@ -190,23 +189,24 @@ class BrownDwarf : public GenericObject {
 
       NgAccelerator ng(ng_interval);
 
-      std::cout << "\n--- Starting iteration loop ---\n"
+      std::cout << "\n--- Starting iteration loop (gas planet) ---\n"
                 << "  max iterations:        " << max_iterations << "\n"
                 << "  convergence threshold: " << convergence_threshold << "\n"
                 << "  Ng acceleration:       every " << ng_interval << " iterations"
                 << (ng_interval == 0 ? " (disabled)" : "") << "\n"
-                << "  target flux:           " << std::scientific << std::setprecision(4)
-                << target_flux << " erg/cm2/s\n\n" << std::fixed;
+                << "  internal temperature:  " << internal_temperature << " K\n"
+                << "  internal (target) flux:" << std::scientific << std::setprecision(4)
+                << target_flux << " erg/cm2/s\n"
+                << "  zenith angle (cos):    " << std::fixed << zenith_angle << "\n\n";
 
       std::cout << "  " << std::setw(5) << "iter"
                 << "  " << std::setw(12) << "max|dT/T|"
                 << "  " << std::setw(9) << "max|dT|"
                 << "  " << std::setw(5) << "@ lv"
-                << "  " << std::setw(12) << "dF/F(TOA)"
-                << "  " << std::setw(12) << "flux_divergence"
+                << "  " << std::setw(12) << "dF/F(int)"
                 << "  " << std::setw(8) << "T_bot"
                 << "  " << std::setw(8) << "T_top"
-                << "  " << std::setw(12) << "N_conv"
+                << "  " << std::setw(6) << "N_conv"
                 << "\n";
 
       for (size_t iter = 0; iter < max_iterations; ++iter)
@@ -223,17 +223,23 @@ class BrownDwarf : public GenericObject {
         // 3. Opacities
         opacity.calculate();
 
-        // 4. Radiative transfer
-        radiative_transfer->calculate(atmosphere, opacity, radiation_field);
+        // 4. Boundary conditions: irradiated top, no surface (semi-infinite bottom)
+        RadiativeBoundaryConditions bc;
+        bc.incident_flux = stellar_flux;
+        bc.zenith_angle = zenith_angle;
+        bc.has_surface = false;
 
-        // 5. Flux divergence
+        // 5. Radiative transfer
+        radiative_transfer->calculate(atmosphere, opacity, radiation_field, bc);
+
+        // 6. Flux divergence
         radiation_field.calcFluxDivergence(atmosphere.pressure);
 
-        // 6. Temperature correction (flux divergence + optional LRE)
+        // 7. Temperature correction (flux divergence + internal-flux anchoring)
         temp_correction->calcCorrection(
           surface_gravity, atmosphere, radiation_field, opacity);
 
-        // 6b. Limit maximum temperature change per iteration
+        // 8. Limit maximum temperature change per iteration
         if (max_change_per_iteration > 0)
         {
           for (size_t i = 0; i < atmosphere.temperature.size(); ++i)
@@ -246,16 +252,17 @@ class BrownDwarf : public GenericObject {
           }
         }
 
-        // 7. Convective adjustment (the linearisation Newton handles convection internally,
+        // 9. Convective adjustment (the linearisation Newton handles convection internally,
         // slaving convective layers to the adiabat, so the explicit adjustment is skipped there)
         if (convection && !use_linearisation)
           convection->adjust(atmosphere);
 
-        // 8. Ng acceleration (relaxation correctors only; the Newton step self-converges)
+        // 10. Ng acceleration (only for the fixed-point relaxation correctors;
+        // the full-linearisation Newton step converges on its own)
         bool ng_applied = use_linearisation
           ? false : ng.accelerate(atmosphere.temperature, iter);
 
-        // 9. Convergence check: max |dT/T| and max |dT|
+        // 11. Convergence check
         double max_change = 0;
         double max_abs_dT = 0;
         double max_dT = 0;
@@ -276,10 +283,13 @@ class BrownDwarf : public GenericObject {
           }
         }
 
-        // flux conservation: max relative net-flux deviation from the internal flux over the
-        // column -- the physical radiative-equilibrium metric (not the skin-dominated max|dT/T|).
-        // convergence/display metric: the corrector's radiative flux residual (excludes
-        // convective + optically-thin-skin layers) when provided, else the TOA flux error.
+        // flux conservation: the largest relative deviation of the net flux from the
+        // internal flux over the whole column. This is the physical radiative-equilibrium
+        // convergence metric -- unlike max|dT/T| it is not dominated by the weakly-determined,
+        // energetically-negligible optically-thin skin.
+        // convergence/display metric: the corrector's radiative flux-conservation residual
+        // (excludes convective + optically-thin-skin layers) when it provides one, else the
+        // TOA flux error.
         const double lin_resid = temp_correction->lastConvergenceResidual();
         const double flux_error = (lin_resid >= 0.0)
           ? lin_resid : (radiation_field.flux_total.back() - target_flux) / target_flux;
@@ -292,7 +302,6 @@ class BrownDwarf : public GenericObject {
                   << "  " << std::setw(9) << std::fixed << std::setprecision(3) << max_dT
                   << "  " << std::setw(5) << max_abs_dT_level
                   << "  " << std::setw(12) << std::scientific << std::setprecision(4) << flux_error
-                  << "  " << std::setw(12) << std::scientific << std::setprecision(4) << radiation_field.flux_divergence[max_abs_dT_level]
                   << "  " << std::setw(8) << std::fixed << std::setprecision(0) << atmosphere.temperature[0]
                   << "  " << std::setw(8) << atmosphere.temperature.back()
                   << "  " << std::setw(6) << n_conv
@@ -318,10 +327,14 @@ class BrownDwarf : public GenericObject {
 
   private:
     double surface_gravity;
-    double effective_temperature;
-    double metallicity;
-    double c_to_o_ratio;
+    double internal_temperature;
     double target_flux;
+    double zenith_angle;
+    std::unique_ptr<StellarSpectrum> stellar_spectrum;
+    std::vector<double> stellar_flux;
+
+    std::vector<double> chemistry_parameters;
+
     double bottom_radius;
     bool use_variable_gravity;
 
@@ -335,12 +348,10 @@ class BrownDwarf : public GenericObject {
 
     void calcChemistry()
     {
-      std::vector<double> params{metallicity, c_to_o_ratio};
-
       for (auto& chem : chemistry)
       {
         chem->calcChemicalComposition(
-          params,
+          chemistry_parameters,
           atmosphere.temperature,
           atmosphere.pressure,
           atmosphere.number_densities,
@@ -349,6 +360,7 @@ class BrownDwarf : public GenericObject {
     }
 };
 
+
 } // namespace ngam
 
-#endif // BROWN_DWARF_H
+#endif // GAS_PLANET_H

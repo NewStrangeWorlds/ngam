@@ -49,8 +49,29 @@ inline double quadratureTrapezoidal(const std::vector<double> &x, const std::vec
 }
 
 
+// Per-point weights w_i of the trapezoidal rule, i.e. sum_i w_i y_i equals
+// quadratureTrapezoidal(x, y). Used to accumulate spectral integrals (and their
+// temperature Jacobians) point-by-point inside the monochromatic radiative-transfer
+// loop, consistently with quadratureTrapezoidal used elsewhere.
+inline std::vector<double> trapezoidalWeights(const std::vector<double>& x)
+{
+  const size_t n = x.size();
+  std::vector<double> w(n, 0.0);
+
+  if (n == 1) { w[0] = 1.0; return w; }
+
+  w[0]   = 0.5 * (x[1] - x[0]);
+  w[n-1] = 0.5 * (x[n-1] - x[n-2]);
+
+  for (size_t i = 1; i + 1 < n; ++i)
+    w[i] = 0.5 * (x[i+1] - x[i-1]);
+
+  return w;
+}
+
+
 inline double quadratureTrapezoidal(
-  const std::vector<double> &x, 
+  const std::vector<double> &x,
   const std::vector<double> &y,
   const size_t idx_start,
   const size_t idx_end)

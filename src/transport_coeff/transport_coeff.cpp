@@ -273,8 +273,7 @@ void TransportCoefficients::calculate(
 {
   absorption_coeff.assign(spectral_grid->nbSpectralPoints(), 0);
   scattering_coeff.assign(spectral_grid->nbSpectralPoints(), 0);
-
-
+  
   for (unsigned int i=0; i<gas_species.size(); i++)
   {
     //std::cout << gas_species[i]->species_name << "\n";

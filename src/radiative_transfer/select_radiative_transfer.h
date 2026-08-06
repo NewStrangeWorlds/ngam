@@ -28,18 +28,18 @@
 
 #include "radiative_transfer.h"
 
-#include "short_characteristics.h"
 #include "discrete_ordinate.h"
+#include "adding_doubling.h"
 #include "../additional/exceptions.h"
 
 
 namespace ngam {
 
-//definition of the different chemistry modules with an
-//identifier, a keyword to be located in the config file and a short version of the keyword
+//definition of the different radiative transfer modules with an
+//identifier and a keyword to be located in the config file
 namespace rt_modules{
-  enum id {scm, disort};
-  const std::vector<std::string> description {"scm", "disort"};
+  enum id {disort, adding_doubling};
+  const std::vector<std::string> description {"disort", "adding_doubling"};
 }
 
 
@@ -73,9 +73,6 @@ inline std::unique_ptr<RadiativeTransfer> selectRadiativeTransfer(
 
   switch (module_id)
   {
-    case rt_modules::scm :
-      return std::make_unique<ShortCharacteristics>(spectral_grid);
-
     case rt_modules::disort :
       if (parameters.size() != 1)
       {
@@ -83,6 +80,17 @@ inline std::unique_ptr<RadiativeTransfer> selectRadiativeTransfer(
         throw InvalidInput(std::string ("forward_model.config"), error_message);
       }
       return std::make_unique<DiscreteOrdinates>(
+        spectral_grid,
+        std::stoi(parameters[0]),
+        nb_grid_points);
+
+    case rt_modules::adding_doubling :
+      if (parameters.size() != 1)
+      {
+        std::string error_message = "Adding-doubling radiative transfer requires exactly one parameter (number of quadrature points per hemisphere)!\n";
+        throw InvalidInput(std::string ("forward_model.config"), error_message);
+      }
+      return std::make_unique<AddingDoubling>(
         spectral_grid,
         std::stoi(parameters[0]),
         nb_grid_points);

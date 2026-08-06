@@ -74,25 +74,29 @@ void TimeSteppingTemperature::calcCorrection(
       atmosphere.temperature[i] = 1.0;
   }
 
-  // flux anchoring: only for brown dwarfs (target_flux > 0)
-  // in equilibrium F_rad(TOA) = sigma * T_eff^4; adjust the bottom temperature
-  // to drive the outgoing flux towards the target
+  // deep-flux anchoring: only for objects with an internal heat flux
+  // (target_flux > 0: brown dwarfs and gas planets). The deep (bottom)
+  // temperature is adjusted so that the net flux at the BOTTOM of the
+  // atmosphere equals the internal heat flux, F_net(bottom) = sigma * T_int^4
+  // = target_flux. This follows HELIOS (Malik et al.), which drives
+  // F_intern - F_net[BOA] -> 0 at the deepest interface.
+  //
+  // The bottom net flux (flux_total[0]) is used here, NOT the top-of-atmosphere
+  // flux: for an optically thick base the emergent flux is decoupled from the
+  // deep temperature, so anchoring on F_net(TOA) cannot control T[0] and drives
+  // it to the floor. The deep net flux, carried by the thermal gradient through
+  // the diffusion lower boundary, responds directly to T[0].
   if (target_flux > 0)
   {
-    const double F_actual = radiation_field.flux_total.back();
-    const double T_i = atmosphere.temperature[0]; //std::pow(target_flux / constants::stefan_boltzmann, 0.25);
-    const double p_i = atmosphere.pressure[0];
+    const double F_bottom = radiation_field.flux_total[0];
+    const double T_i = atmosphere.temperature[0];
 
-    const double c_p = ThermodynamicData::meanHeatCapacity(
-      atmosphere.number_densities[0], T_i);
-    double dt_i = alpha * c_p * p_i * 1e6
-           / (surface_gravity * 4.0 * constants::stefan_boltzmann * T_i * T_i * T_i);
-
-    atmosphere.temperature[0] -= dt_i * surface_gravity / c_p
-                                * radiation_field.flux_total.back() * 1e-6;
-
-    // atmosphere.temperature[0] += alpha * (target_flux - F_actual)
-    //    / (4.0 * constants::stefan_boltzmann * T_eff * T_eff * T_eff);
+    // Newton step treating the deep flux as a blackbody in T[0]:
+    //   F ~ sigma * T^4  =>  dF = 4 sigma T^3 dT.
+    // Raising T[0] steepens the deep thermal gradient and raises F_bottom, so
+    // the sign drives F_bottom towards target_flux and vanishes at equilibrium.
+    atmosphere.temperature[0] += alpha * (target_flux - F_bottom)
+      / (4.0 * constants::stefan_boltzmann * T_i * T_i * T_i);
 
     if (atmosphere.temperature[0] < 1.0)
       atmosphere.temperature[0] = 1.0;

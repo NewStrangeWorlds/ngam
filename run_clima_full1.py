@@ -34,16 +34,6 @@ grid = pyngam.SpectralGrid(
     2, 1000.0,
     0.15, 100.0)
 
-# grid = pyngam.SpectralGrid(
-#     opacity_data_path, "",
-#     3, 0.0,                  # mode 3 (covering); spectral_resolution unused
-#     0.15, 100.0,              # wavelength_min/max [µm]
-#     100.0, 350.0,           # covering T range: set max ≈ deepest layer T
-#     30,                       # cov_nb_temperatures: 0 → default ~500 K steps
-#     40000,                    # target number of points
-#     5772.0,                  # host-star T; 0.0 for a brown dwarf
-#     40000)                   # target_nb_points_stellar  (stellar)
-
 # Chemistry: isoprofile with prescribed mixing ratios.
 # The chemistry_parameters vector contains the volume mixing ratios
 # for each species in the order of species_data (see pyngam.species_symbols()).
@@ -58,8 +48,8 @@ composition = {
     "H2O": 1e-4,
     "N2": 1-0.2-1e-6,
 }
-chem_species = ["N2",  "CO2"]
-mix_ratios = [0.02, 0.98]  # H2, O2, H2O, N2
+
+mix_ratios = [0.7, 0.2, 1e-4, 1-0.2-0.7-1e-4]  # H2, O2, H2O, N2
 
 
 # for name, vmr in composition.items():
@@ -68,8 +58,8 @@ mix_ratios = [0.02, 0.98]  # H2, O2, H2O, N2
 
 model = pyngam.TerrestrialPlanet(
     spectral_grid=grid,
-    nb_grid_points=200,
-    atmos_boundary_pressures=[1, 1e-5],
+    nb_grid_points=100,
+    atmos_boundary_pressures=[1, 1e-6],
     cross_section_file_path=opacity_data_path,
     opacity_species_symbol=species_symbols,
     opacity_species_folder=species_folders,
@@ -91,42 +81,12 @@ model = pyngam.TerrestrialPlanet(
     max_iterations=50,
     convergence_threshold=1e-5,
     iteration_gamma=0.2,
-    lre_fraction=0.1,
+    lre_fraction=0.5,
     use_convective_adjustment=True,
-    convection_type="moist",
+    convection_type="dry",
     ng_interval=0,
     max_change_per_iteration=0.1,
     use_linearisation=True)
-
-
-# model = pyngam.TerrestrialPlanet(
-#     spectral_grid=grid,
-#     nb_grid_points=100,
-#     atmos_boundary_pressures=[70, 1e-5],
-#     cross_section_file_path=opacity_data_path,
-#     opacity_species_symbol=species_symbols,
-#     opacity_species_folder=species_folders,
-#     use_clouds=False,
-#     chemistry=[("isoprofile", chem_species)],
-#     rt_type="adding_doubling",
-#     rt_params=["2"],
-#     surface_gravity=980.0,       # cm/s^2 (~ Earth)
-#     zenith_angle=0.5,            # cos(60 deg) = global average approximation
-#     stellar_type="tabulated",
-#     stellar_params=["data/stellar_spectra/spectrum_sun.dat"],   # stellar temperature in K (Sun)
-#     instellation=1361e3*0.5,     # erg/cm^2/s (solar constant: 1361 W/m^2 * 1e3, 0.5 for fast rotator)
-#     surface_type="variable_albedo",       # variable: albedo from file
-#     surface_params=["data/Earth/earth_spectral_surface_reflection.dat"],  #albedo file
-#     chemistry_parameters=mix_ratios,
-#     max_iterations=150,
-#     convergence_threshold=1e-5,
-#     iteration_gamma=0.2,
-#     lre_fraction=0.5,
-#     use_convective_adjustment=True,
-#     convection_type="dry",
-#     ng_interval=0,
-#     max_change_per_iteration=0.1,
-#     use_linearisation=True)
 
 # model = pyngam.TerrestrialPlanet(
 #     spectral_grid=grid,
@@ -177,6 +137,15 @@ model.initialize(
     init_chemistry=[("fixed", ["data/Earth/earth_standard_composition.dat"])],
     init_chemistry_parameters=mix_ratios)
 
+# clima-style start: dry adiabat from a guessed surface temperature up to a tropopause floor.
+_P = np.array(model.atmosphere.pressure)
+_Tsurf, _Ttrop, _nabla = 288.0, 160.0, 0.286
+_Tinit = np.maximum(_Ttrop, _Tsurf * (_P / _P[0])**_nabla)
+model.initialize_from_arrays(
+    temperature=_Tinit.tolist(),
+    number_densities=[list(r) for r in np.array(model.atmosphere.number_densities)],
+    mean_molecular_weight=list(np.array(model.atmosphere.mean_molecular_weight)))
+
 _P = np.array(model.atmosphere.pressure)
 _Tsurf, _Ttrop, _nabla = 288.0, 160.0, 0.286
 _Tinit = np.maximum(_Ttrop, _Tsurf * (_P / _P[0])**_nabla)
@@ -219,7 +188,7 @@ print(f"Net flux at bottom: {flux_total[0]:.4e} erg/cm2/s")
 
 # --- Save ---
 
-save_model("output_terrestrial.nc", model, grid, config={
+save_model("output_clima_full.nc", model, grid, config={
     "surface_gravity": 980.0,
     "surface_albedo": 0.3,
     "stellar_temperature": 5780.0,

@@ -14,6 +14,8 @@
 #include "../temperature/select_temperature_profile.h"
 #include "../temperature/time_stepping_temperature.h"
 #include "../temperature/time_stepping_lre_temperature.h"
+#include "../temperature/linearised_temperature_correction.h"
+#include "../temperature/clima_rce_correction.h"
 #include "../chemistry/select_chemistry.h"
 #include "../convection/dry_adiabatic.h"
 #include "../convection/moist_adiabatic.h"
@@ -49,7 +51,8 @@ class TerrestrialPlanet : public GenericObject {
       size_t ng_interval_ = 10,
       double lre_fraction_ = 0.0,
       double min_convection_pressure_ = 1e-3,
-      double max_change_per_iteration_ = 0.1)
+      double max_change_per_iteration_ = 0.1,
+      bool use_linearisation_ = false)
       : GenericObject(
           spectral_grid,
           nb_grid_points,
@@ -70,7 +73,8 @@ class TerrestrialPlanet : public GenericObject {
         iteration_gamma(iteration_gamma_),
         ng_interval(ng_interval_),
         lre_fraction(lre_fraction_),
-        max_change_per_iteration(max_change_per_iteration_)
+        max_change_per_iteration(max_change_per_iteration_),
+        use_linearisation(use_linearisation_)
     {
       // precompute stellar flux per wavenumber
       stellar_flux = stellar_spectrum->calcFlux(spectral_grid->wavenumber_list);
@@ -146,19 +150,125 @@ class TerrestrialPlanet : public GenericObject {
 
     double getSurfaceTemperature() const { return surface->temperature; }
 
+    // Diagnostic: run ONE forward solve at the given temperature profile (chemistry, structure,
+    // opacity, radiative transfer) and return the per-level net flux. With compute_jac, also computes
+    // the analytic temperature Jacobians; read them afterwards via the radiation_field. Lets a caller
+    // finite-difference the FULL forward map (opacity recomputed) against the analytic Jacobian.
+    std::vector<double> evalForward(const std::vector<double>& temperature, bool compute_jac,
+                                    bool recompute_opacity = true)
+    {
+      atmosphere.temperature = temperature;
+      if (recompute_opacity)
+      {
+        calcChemistry();
+        atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
+        opacity.calculate();
+      }
+      RadiativeBoundaryConditions bc;
+      bc.incident_flux = stellar_flux;
+      bc.zenith_angle = zenith_angle;
+      bc.surface_albedo = surface->getAlbedo();
+      bc.surface_temperature = temperature[0];
+      bc.has_surface = true;
+      radiation_field.compute_jacobian = compute_jac;
+      radiative_transfer->calculate(atmosphere, opacity, radiation_field, bc);
+      return radiation_field.flux_total;
+    }
+
     bool computeAtmosphericStructure() override
     {
-      // target_flux = 0 for irradiated planets
-      // (DISORT includes the beam in F_down, so F_net = F_up - F_down = 0 at TOA)
+      // target_flux = 0: no internal heat. In radiative-convective equilibrium F_net = 0
+      // everywhere (DISORT folds the stellar beam into F_down), and F_net(surface) = 0 is the
+      // surface energy balance. The flux residual is normalised by the incident stellar flux.
       const double target_flux = 0.0;
+      const double flux_scale = std::max(1.0,
+        aux::quadratureTrapezoidal(spectral_grid->wavenumber_list, stellar_flux) * zenith_angle);
 
       std::unique_ptr<TemperatureCorrection> temp_correction;
-      if (lre_fraction > 0)
+      if (use_linearisation)
+      {
+        // surface-anchored: the troposphere is slaved to lv 0 (= the surface), which keeps its
+        // flux row so F_net[0]=0 (surface balance) is enforced; convection comes from the scheme.
+        // LIN_NO_CONV (debug) forces a pure-radiative run -- a clean test bed for the flux-Newton.
+        Convection* conv_ptr = std::getenv("LIN_NO_CONV") ? nullptr : convection.get();
+
+        if (std::getenv("CLIMA_RCE"))
+        {
+          // Faithful clima (AdiabatClimate) RCE solver. It builds its Jacobian by finite differences,
+          // so it needs a forward model that returns flux_total AND can FREEZE opacity+composition for
+          // the Jacobian columns (recompute=false) vs. recompute them for the true/trial residual.
+          temp_correction = std::make_unique<ClimaRCECorrection>(target_flux, conv_ptr);
+          temp_correction->setForwardEvalFull(
+            [this](const std::vector<double>& T, bool recompute_opacity, bool compute_jacobian,
+                   std::vector<double>& flux_out, std::vector<double>& net_heating_out)
+            {
+              atmosphere.temperature = T;
+              if (recompute_opacity)   // clima's true residual: recompute composition + structure + opacity
+              {
+                calcChemistry();
+                atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
+                opacity.calculate();
+              }
+              RadiativeBoundaryConditions bc;
+              bc.incident_flux = stellar_flux;
+              bc.zenith_angle = zenith_angle;
+              bc.surface_albedo = surface->getAlbedo();
+              // BOA-tied surface: pass the folded sentinel (-1) so the surface has NO independent DOF
+              // and emits at the bottom-level temperature. (0 would emit nothing; a positive snapshot
+              // T[0] gives the surface its own DOF, which the single BOA knob then drives -> a dropped
+              // surface column / fold-flip in the heating Jacobian.)
+              bc.surface_temperature = -1.0;
+              bc.has_surface = true;
+              radiation_field.compute_jacobian = compute_jacobian;   // analytic Planck-only Jacobian on demand
+              radiative_transfer->calculate(atmosphere, opacity, radiation_field, bc);
+              flux_out = radiation_field.flux_total;
+              net_heating_out = radiation_field.net_heating;
+            });
+        }
+        else
+        {
+        // surface-anchored: the troposphere is slaved to lv 0 (= the surface), which keeps its
+        // flux row so F_net[0]=0 (surface balance) is enforced; convection comes from the scheme.
+        temp_correction = std::make_unique<LinearisedTemperatureCorrection>(
+          target_flux, 1.0, 1.0, max_change_per_iteration, conv_ptr,
+          flux_scale, /*surface_anchored=*/true);
+
+        // give the affine-covariant (NLEQ-ERR) Newton a way to evaluate the TRUE residual at trial
+        // temperatures -- a forward RT solve without the Jacobian -- for its natural monotonicity test.
+        temp_correction->setForwardFluxEval(
+          [this](const std::vector<double>& T, std::vector<double>& flux_out)
+          {
+            atmosphere.temperature = T;
+            // DIAGNOSTIC (env LIN_FREEZE_OPAC): keep the opacity FIXED during the Newton trials so the
+            // trial residual is consistent with the Planck-only analytic Jacobian (the outer loop
+            // still updates the opacity at the committed T between iterations). Tests whether the
+            // Jacobian/map opacity inconsistency is what corrupts the radiative profile.
+            if (!std::getenv("LIN_FREEZE_OPAC"))
+            {
+              calcChemistry();
+              atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
+              opacity.calculate();
+            }
+            RadiativeBoundaryConditions bc;
+            bc.incident_flux = stellar_flux;
+            bc.zenith_angle = zenith_angle;
+            bc.surface_albedo = surface->getAlbedo();
+            bc.surface_temperature = T[0];
+            bc.has_surface = true;
+            radiation_field.compute_jacobian = false;
+            radiative_transfer->calculate(atmosphere, opacity, radiation_field, bc);
+            flux_out = radiation_field.flux_total;
+          });
+        }
+      }
+      else if (lre_fraction > 0)
         temp_correction = std::make_unique<TimeSteppingLRETemperature>(
           -1.0, iteration_gamma, target_flux, lre_fraction);
       else
         temp_correction = std::make_unique<TimeSteppingTemperature>(
           -1.0, iteration_gamma, target_flux);
+
+      radiation_field.compute_jacobian = temp_correction->requiresRadiationJacobian();
 
       NgAccelerator ng(ng_interval);
 
@@ -174,6 +284,7 @@ class TerrestrialPlanet : public GenericObject {
                 << "  " << std::setw(9) << "max|dT|"
                 << "  " << std::setw(5) << "@ lv"
                 << "  " << std::setw(12) << "F_net(TOA)"
+                << "  " << std::setw(11) << "conv_resid"
                 << "  " << std::setw(8) << "T_bot"
                 << "  " << std::setw(8) << "T_top"
                 << "  " << std::setw(8) << "T_surf"
@@ -201,9 +312,11 @@ class TerrestrialPlanet : public GenericObject {
         bc.surface_temperature = surface->temperature;
         bc.has_surface = true;
         
-        // 5. Radiative transfer
+        // 5. Radiative transfer (trial evaluations in the corrector leave compute_jacobian off,
+        //    so re-arm it here for the base solve that the temperature Jacobian is taken from)
+        radiation_field.compute_jacobian = temp_correction->requiresRadiationJacobian();
         radiative_transfer->calculate(atmosphere, opacity, radiation_field, bc);
-        
+
         // 6. Flux divergence
         radiation_field.calcFluxDivergence(atmosphere.pressure);
         
@@ -211,13 +324,21 @@ class TerrestrialPlanet : public GenericObject {
         temp_correction->calcCorrection(
           surface_gravity, atmosphere, radiation_field, opacity);
 
-        // 8. Update surface temperature via surface model
-        surface->calcTemperature(radiation_field, 1000.0);
+        // 8. Surface temperature. The linearisation solves it inside the Newton (surface-anchored:
+        // T_surf = the bottom level, set by F_net[0]=0), so just mirror it; otherwise the explicit
+        // surface model + Shapiro smoothing of the relaxation update.
+        if (use_linearisation)
+          surface->temperature = atmosphere.temperature[0];
+        else
+        {
+          surface->calcTemperature(radiation_field, 1000.0);
+          shapiroFilter(atmosphere.temperature, 0.25);
+        }
 
-        shapiroFilter(atmosphere.temperature, 0.25);
-
-        // 9. Limit maximum temperature change per iteration
-        if (max_change_per_iteration > 0)
+        // 9. Limit maximum temperature change per iteration. Skipped when the corrector sets its own
+        // step (NLEQ-ERR): an independent per-level clip here breaks the adiabat slaving (it would clip
+        // a convective layer differently from its surface anchor) -> a deep-layer bang-bang oscillation.
+        if (max_change_per_iteration > 0 && !temp_correction->managesOwnStepSize())
         {
           for (size_t i = 0; i < atmosphere.temperature.size(); ++i)
           {
@@ -229,12 +350,12 @@ class TerrestrialPlanet : public GenericObject {
           }
         }
         
-        // 10. Convective adjustment
-        if (convection)
+        // 10. Convective adjustment (the linearisation handles convection internally)
+        if (convection && !use_linearisation)
           convection->adjust(atmosphere);
 
-        // 11. Ng acceleration
-        bool ng_applied = ng.accelerate(atmosphere.temperature, iter);
+        // 11. Ng acceleration (relaxation correctors only; the Newton self-converges)
+        bool ng_applied = use_linearisation ? false : ng.accelerate(atmosphere.temperature, iter);
 
         // 12. Convergence check
         double max_change = 0;
@@ -261,11 +382,16 @@ class TerrestrialPlanet : public GenericObject {
         const int n_conv = std::count(
           atmosphere.convective.begin(), atmosphere.convective.end(), 1);
 
+        // the actual convergence metric (max per-level flux imbalance / stellar, gated by |dT/T|): this is
+        // what is tested below, so print it -- F_net(TOA) is only the top and floors long before the deep.
+        const double lin_resid = temp_correction->lastConvergenceResidual();
+
         std::cout << "  " << std::setw(5) << iter + 1
                   << "  " << std::setw(12) << std::scientific << std::setprecision(4) << max_change
                   << "  " << std::setw(9) << std::fixed << std::setprecision(3) << max_dT
                   << "  " << std::setw(5) << max_abs_dT_level
                   << "  " << std::setw(12) << std::scientific << std::setprecision(4) << flux_toa
+                  << "  " << std::setw(11) << std::scientific << std::setprecision(3) << lin_resid
                   << "  " << std::setw(8) << std::fixed << std::setprecision(0) << atmosphere.temperature[0]
                   << "  " << std::setw(8) << atmosphere.temperature.back()
                   << "  " << std::setw(8) << std::setprecision(1) << surface->temperature
@@ -273,7 +399,10 @@ class TerrestrialPlanet : public GenericObject {
                   << (ng_applied ? "  [Ng]" : "")
                   << "\n";
 
-        if (max_change < convergence_threshold)
+        // converge on the corrector's flux residual when it provides one (linearisation), else |dT/T|
+        const bool converged = (lin_resid >= 0.0)
+          ? (lin_resid < convergence_threshold) : (max_change < convergence_threshold);
+        if (converged)
         {
           std::cout << "\n  Converged after " << iter + 1 << " iterations.\n" << std::endl;
           return true;
@@ -300,6 +429,7 @@ class TerrestrialPlanet : public GenericObject {
     size_t ng_interval;
     double lre_fraction;
     double max_change_per_iteration;
+    bool use_linearisation = false;
 
     void calcChemistry()
     {

@@ -8,7 +8,16 @@
 namespace ngam {
 
 
-void MoistAdiabaticAdjustment::adjust(Atmosphere& atmosphere)
+double MoistAdiabaticAdjustment::convectiveGradient(
+  const std::vector<double>& number_densities,
+  double temperature,
+  double pressure) const
+{
+  return ThermodynamicData::moistAdiabaticGradient(number_densities, temperature, pressure);
+}
+
+
+void MoistAdiabaticAdjustment::adjust(Atmosphere& atmosphere) const
 {
   const size_t n = atmosphere.pressure.size();
   if (n < 2) return;
@@ -36,14 +45,10 @@ void MoistAdiabaticAdjustment::adjust(Atmosphere& atmosphere)
       const double nabla_actual = (ln_T_i - ln_T_ip1) / d_ln_P;
 
       // moist adiabatic gradient at the midpoint (average of both levels)
-      const double nabla_ad_i   = ThermodynamicData::moistAdiabaticGradient(
-        atmosphere.number_densities[i],
-        atmosphere.temperature[i],
-        atmosphere.pressure[i]);
-      const double nabla_ad_ip1 = ThermodynamicData::moistAdiabaticGradient(
-        atmosphere.number_densities[i+1],
-        atmosphere.temperature[i+1],
-        atmosphere.pressure[i+1]);
+      const double nabla_ad_i   = convectiveGradient(
+        atmosphere.number_densities[i], atmosphere.temperature[i], atmosphere.pressure[i]);
+      const double nabla_ad_ip1 = convectiveGradient(
+        atmosphere.number_densities[i+1], atmosphere.temperature[i+1], atmosphere.pressure[i+1]);
       const double nabla_ad = 0.5 * (nabla_ad_i + nabla_ad_ip1);
 
       if (nabla_actual <= nabla_ad) continue;

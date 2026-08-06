@@ -1,13 +1,11 @@
 clearvars;
 
-file_name = 'output_terrestrial.nc';
-
 % Load the data
-T   = ncread(file_name, 'temperature');
-P   = ncread(file_name, 'pressure');
-conv = ncread(file_name, 'convective');
-flux_div = ncread(file_name, 'flux_total');
-flux_tot = ncread(file_name, 'flux_total');
+T   = ncread('output_gas.nc', 'temperature');
+P   = ncread('output_gas.nc', 'pressure');
+conv = ncread('output_gas.nc', 'convective');
+flux_div = ncread('output_gas.nc', 'flux_divergence');
+flux_tot = ncread('output_gas.nc', 'flux_total');
 
 % Split into radiative and convective
 rad  = conv == 0;
@@ -25,9 +23,9 @@ cnv  = conv == 1;
 %If you want connected line segments coloured by zone instead of dots, you can loop over contiguous regions:
 
 
-T    = ncread(file_name, 'temperature');
-P    = ncread(file_name, 'pressure');
-conv = ncread(file_name, 'convective');
+T    = ncread('output_gas.nc', 'temperature');
+P    = ncread('output_gas.nc', 'pressure');
+conv = ncread('output_gas.nc', 'convective');
 
 figure; hold on
 
@@ -52,8 +50,8 @@ box on;
 set(gca, 'YScale', 'log', 'YDir', 'reverse')
 xlabel('Temperature (K)','Interpreter','latex')
 ylabel('Pressure (bar)','Interpreter','latex')
-legend({'Convective', 'Radiative'}, 'Location', 'northeast', 'Interpreter','latex')
-legend('boxoff');
+% legend({'Convective', 'Radiative'}, 'Location', 'northeast', 'Interpreter','latex')
+% legend('boxoff');
 set(gca,'TickLabelInterpreter','latex');
 
 ax=gca;
@@ -74,7 +72,7 @@ target = 5.6704e+03 * 0.001;
 
 figure;
 
-loglog(abs(flux_tot).*0.001, P);
+loglog(flux_tot.*0.001, P);
 set(gca, 'YScale', 'log', 'YDir', 'reverse')
 xlabel('Flux ')
 ylabel('Pressure [bar]')

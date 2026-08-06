@@ -19,7 +19,11 @@ class DryAdiabaticAdjustment : public Convection {
                 << " (min pressure: " << min_pressure << " bar)\n\n";
     }
     virtual ~DryAdiabaticAdjustment() {}
-    void adjust(Atmosphere& atmosphere) override;
+    void adjust(Atmosphere& atmosphere) const override;
+    double convectiveGradient(
+      const std::vector<double>& number_densities,
+      double temperature,
+      double /*pressure*/) const override;
   private:
     size_t max_sweeps;
     double min_pressure;

@@ -35,10 +35,32 @@ include(FetchContent)
 FetchContent_Declare(
   disortpp
   GIT_REPOSITORY https://github.com/NewStrangeWorlds/DisORT
-  GIT_TAG        v1.1
+  # main branch now includes the analytic flux/mean-intensity temperature
+  # Jacobians (previously on the dev branch).
+  GIT_TAG        main
   GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(disortpp)
+
+# Optional adding-doubling radiative transfer solver. Fetched after disortpp so
+# that the shared Eigen 3.4 dependency is already populated (both repos declare an
+# identical "eigen" FetchContent target). Manual populate + EXCLUDE_FROM_ALL keeps
+# the upstream example/test executables out of ngam's default build; only the
+# adding_doubling library target is compiled, on demand, as a dependency.
+FetchContent_Declare(
+  adding_doubling
+  GIT_REPOSITORY https://github.com/NewStrangeWorlds/AddingDoublingRT
+  GIT_TAG        main
+  GIT_SHALLOW    TRUE
+)
+FetchContent_GetProperties(adding_doubling)
+if(NOT adding_doubling_POPULATED)
+  FetchContent_Populate(adding_doubling)
+  add_subdirectory(
+    ${adding_doubling_SOURCE_DIR}
+    ${adding_doubling_BINARY_DIR}
+    EXCLUDE_FROM_ALL)
+endif()
 
 set(FASTCHEM_ONLY_LIBRARY ON)
 FetchContent_Declare(
@@ -78,7 +100,7 @@ set(LIB_SRC
   src/transport_coeff/h2o_cia.cpp
   src/transport_coeff/h_m.cpp
   src/radiative_transfer/discrete_ordinate.cpp
-  src/radiative_transfer/short_characteristics.cpp
+  src/radiative_transfer/adding_doubling.cpp
   src/atmosphere/atmosphere.cpp
   src/chemistry/isoprofile_chemistry.cpp
   src/chemistry/fastchem_chemistry.cpp
@@ -87,13 +109,18 @@ set(LIB_SRC
   src/temperature/milne_solution_temperature.cpp
   src/temperature/time_stepping_temperature.cpp
   src/temperature/time_stepping_lre_temperature.cpp
+  src/temperature/linearised_temperature_correction.cpp
+  src/temperature/clima_rce_correction.cpp
   src/convection/dry_adiabatic.cpp
   src/convection/moist_adiabatic.cpp
 )
 
 # Static library
 add_library(ngam_lib STATIC ${LIB_SRC})
-target_link_libraries(ngam_lib PUBLIC fastchem_lib OpenMP::OpenMP_CXX disortpp)
+target_link_libraries(ngam_lib PUBLIC fastchem_lib OpenMP::OpenMP_CXX disortpp adding_doubling)
+# Eigen (shared FetchContent populated by disortpp) -- for unsupported/Eigen/NonLinearOptimization
+# (MINPACK hybrj port) used by the clima RCE corrector's inner solver.
+target_include_directories(ngam_lib PRIVATE ${eigen_SOURCE_DIR})
 set_target_properties(ngam_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Main executable
