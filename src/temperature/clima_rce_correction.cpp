@@ -161,71 +161,6 @@ void ClimaRCECorrection::calcCorrection(
   // the FD isolates the Planck-source response (the analytic's exact domain) and the opacity-sampling noise
   // cancels common-mode in F(T+dT)-F(T-dT). Any residual discrepancy is therefore a genuine analytic-
   // derivative error, not sampling. Writes /tmp/jac_*.txt + a stderr summary, then returns.
-  if (std::getenv("CLIMA_JACTEST"))
-  {
-    const std::vector<double> T0 = atmosphere.temperature;
-    std::vector<double> F0, NH0;
-    forward_eval_full_(T0, /*recompute_opacity=*/false, /*compute_jacobian=*/true, F0, NH0);
-    const std::vector<std::vector<double>> Anf = radiation_field.net_flux_jacobian;    // analytic dF_net[i]/dT[j]
-    const std::vector<std::vector<double>> Anh = radiation_field.net_heating_jacobian; // analytic dNH[i]/dT[j]
-    const std::vector<std::vector<double>> Amk = radiation_field.meanint_kappa_jacobian; // analytic d(num)[i]/dT[j]
-
-    // FD reference for the kappa-weighted mean-intensity sum num_i = sum_k w_k kappa_k,i J_k,i (cgs),
-    // built from the SAME frozen absorption_coeff the analytic contraction uses (recompute_opacity=false
-    // keeps kappa fixed), so the test isolates d(num)/dT, not an opacity response.
-    const std::vector<double>& wn_jt = radiation_field.spectral_grid->wavenumber_list;
-    const std::vector<double> w_jt = aux::trapezoidalWeights(wn_jt);
-    const size_t nb_nu_jt = wn_jt.size();
-    auto numNow = [&](std::vector<double>& out){
-      out.assign(n, 0.0);
-      for (size_t i = 0; i < n; ++i)
-        for (size_t k = 0; k < nb_nu_jt; ++k)
-          out[i] += w_jt[k] * opacity.absorption_coeff[k][i] * radiation_field.mean_intensity[i][k];
-    };
-
-    const double dT = std::getenv("CLIMA_JACDT") ? std::atof(std::getenv("CLIMA_JACDT")) : 0.1;
-    std::vector<std::vector<double>> Fnf(n, std::vector<double>(n, 0.0)), Fnh(n, std::vector<double>(n, 0.0));
-    std::vector<std::vector<double>> Fmk(n, std::vector<double>(n, 0.0));
-    for (size_t j = 0; j < n; ++j)
-    {
-      std::vector<double> Tp = T0, Tm = T0; Tp[j] += dT; Tm[j] -= dT;
-      std::vector<double> Fp, NHp, Fm, NHm, nump, numm;
-      forward_eval_full_(Tp, false, false, Fp, NHp); numNow(nump);
-      forward_eval_full_(Tm, false, false, Fm, NHm); numNow(numm);
-      for (size_t i = 0; i < n; ++i)
-      {
-        Fnf[i][j] = (Fp[i] - Fm[i]) / (2.0*dT);
-        Fnh[i][j] = (NHp[i] - NHm[i]) / (2.0*dT);
-        Fmk[i][j] = (nump[i] - numm[i]) / (2.0*dT);
-      }
-      if (j % 20 == 0) std::fprintf(stderr, "[JACTEST] FD column %zu/%zu\n", j, n);
-    }
-    auto summarize = [&](const char* name, const std::vector<std::vector<double>>& A, const std::vector<std::vector<double>>& Fd){
-      double maxA=0,maxFd=0,maxAbsDiff=0,frobD=0,frobA=0,worstRel=0; size_t bi=0,bj=0,wi=0,wj=0;
-      for (size_t i=0;i<n;++i) for (size_t j=0;j<n;++j){
-        const double a=A[i][j], f=Fd[i][j], d=std::abs(a-f);
-        maxA=std::max(maxA,std::abs(a)); maxFd=std::max(maxFd,std::abs(f));
-        if (d>maxAbsDiff){maxAbsDiff=d; bi=i; bj=j;} frobD+=d*d; frobA+=a*a;
-      }
-      for (size_t i=0;i<n;++i) for (size_t j=0;j<n;++j){
-        const double a=A[i][j], f=Fd[i][j], sc=std::max(std::abs(a),std::abs(f));
-        if (sc > 1e-3*maxA){ const double rel=std::abs(a-f)/sc; if (rel>worstRel){worstRel=rel; wi=i; wj=j;} }
-      }
-      std::fprintf(stderr, "[JACTEST] %-16s max|A|=%.4e max|FD|=%.4e  ||A-FD||/||A||=%.4e\n", name, maxA, maxFd, std::sqrt(frobD/std::max(frobA,1e-300)));
-      std::fprintf(stderr, "                   max|A-FD|=%.3e @[%zu][%zu] A=%.3e FD=%.3e | worst rel(sig)=%.3f @[%zu][%zu] A=%.3e FD=%.3e\n",
-        maxAbsDiff,bi,bj,A[bi][bj],Fd[bi][bj], worstRel,wi,wj,A[wi][wj],Fd[wi][wj]);
-    };
-    summarize("net_flux_jac", Anf, Fnf);
-    summarize("net_heating_jac", Anh, Fnh);
-    summarize("meanint_kappa_jac", Amk, Fmk);
-    auto dump=[&](const char* fn, const std::vector<std::vector<double>>& M){ FILE* f=std::fopen(fn,"w"); for(size_t i=0;i<n;++i){for(size_t j=0;j<n;++j)std::fprintf(f,"%.10e ",M[i][j]); std::fprintf(f,"\n");} std::fclose(f); };
-    dump("/tmp/jac_Anf.txt",Anf); dump("/tmp/jac_FDnf.txt",Fnf); dump("/tmp/jac_Anh.txt",Anh); dump("/tmp/jac_FDnh.txt",Fnh);
-    dump("/tmp/jac_Amk.txt",Amk); dump("/tmp/jac_FDmk.txt",Fmk);
-    { FILE* f=std::fopen("/tmp/jac_levels.txt","w"); for(size_t i=0;i<n;++i) std::fprintf(f,"%zu %.8e %.8e\n", i, atmosphere.pressure[i], T0[i]); std::fclose(f); }
-    std::fprintf(stderr, "[JACTEST] wrote /tmp/jac_{Anf,FDnf,Anh,FDnh,levels}.txt (n=%zu dT=%g central)\n", n, dT);
-    forward_eval_full_(T0, /*recompute_opacity=*/true, false, F0, NH0);   // restore clean state
-    atmosphere.temperature = T0; last_residual_ = -1.0; return;
-  }
 
   // ---- mean adiabatic gradient over a level pair (scheme-agnostic) ---------------------------
   auto nablaAd = [&](size_t i, size_t j) -> double {
@@ -438,46 +373,10 @@ void ClimaRCECorrection::calcCorrection(
   // integration, NOT the deficient-Jacobian Newton. Identify it here (Planck-mean layer deepness, contiguous
   // from the surface) and mark it 'deep' so it is excluded from the Newton DOF set; it is reconstructed by the
   // gradient integration after the step. Only the photosphere/top/surface and convective zones remain DOFs.
-  const bool carve_deep = std::getenv("CLIMA_PTC") && std::getenv("CLIMA_PTC_BLEND") && std::getenv("CLIMA_PTC_DEEPINT");
+  constexpr bool carve_deep = false;
   std::vector<char> deep(n, 0);
   int kdeep = -1;                                                  // top level of the carved deep zone (-1 = none)
   std::vector<double> deep_dtau(n, 0.0);                          // Planck-mean optical thickness of layer (i,i+1)
-  if (carve_deep)
-  {
-    const std::vector<double>& wl = radiation_field.spectral_grid->wavenumber_list;
-    const std::vector<double> ww = aux::trapezoidalWeights(wl);
-    std::vector<double> kPl(n, 0.0);
-    for (size_t i = 0; i < n; ++i)
-    {
-      double sB = 0.0, skB = 0.0;
-      for (size_t k = 0; k < wl.size(); ++k)
-      { const double B = disortpp::planckFunction2(wl[k], wl[k], atmosphere.temperature[i]);
-        sB += ww[k]*B; skB += ww[k]*opacity.absorption_coeff[k][i]*B; }
-      kPl[i] = (sB > 0.0) ? skB/sB : 0.0;
-    }
-    const double deep_thr = std::getenv("CLIMA_PTC_DEEPTHR") ? std::atof(std::getenv("CLIMA_PTC_DEEPTHR")) : 0.5;
-    for (size_t i = 0; i + 1 < n; ++i)                             // grow the deep from the surface while layers stay thick
-    {
-      if (slaved[i] || slaved[i+1]) break;                        // hit convection -> end of the radiative deep
-      const double kappa = 0.5*(kPl[i+1] + kPl[i]);
-      const double dtau  = kappa * std::abs(atmosphere.altitude[i+1] - atmosphere.altitude[i]);
-      deep_dtau[i] = dtau;                                        // layer (i,i+1) thickness -> grey-flux fallback below
-      if (dtau/(dtau + 1.0) < deep_thr) break;                    // thinned to dtau<~1 -> photosphere edge
-      kdeep = static_cast<int>(i + 1);
-    }
-    if (kdeep >= 2 && kdeep + 1 < static_cast<int>(n))
-    {
-      for (int i = 1; i <= kdeep; ++i) deep[i] = 1;               // levels 1..kdeep are integration-only
-      // The SURFACE (level 0) is the bottom endpoint of the SAME one-anchor downward sweep, not a second
-      // anchor: extend the integration through it and drop the standalone surface energy-balance Newton (doc
-      // §6.7 "one scalar, not two"). T0 then falls out as the stiff bottom leaf -- the bulk deep is anchored
-      // at the cold photosphere above, so T0 does not drive the deep and the surface stays non-degenerate
-      // (no leaf->root runaway). F_net[0]->target is satisfied as the i=0 endpoint of flux conservation.
-      if (zone_of_dof[0] < 0) deep[0] = 1;
-    }
-    else
-      kdeep = -1;
-  }
 
   // ---- active DOFs (every level that is neither slaved nor carved-out deep) ---------------------
   std::vector<size_t> unk;
@@ -520,7 +419,7 @@ void ClimaRCECorrection::calcCorrection(
   // through a Jacobian that is near-singular in exactly those modes. Both residuals share the zero set
   // (F_net = const = 0  <=>  div F_net = 0) but the net-flux form is far better conditioned -> no sawtooth,
   // so the Shapiro filter is not needed (defaulted off below when this mode is on).
-  const bool netflux = std::getenv("CLIMA_NETFLUX") != nullptr;
+  constexpr bool netflux = false;
   const double Fnorm = radiation_field.flux_down_total.empty()
     ? 1.0 : std::max(1.0, std::abs(radiation_field.flux_down_total.back()));
 
@@ -531,7 +430,7 @@ void ClimaRCECorrection::calcCorrection(
   // noise sawtooth into the residual. RISK: the Nyquist mode is then in the residual's NULL space (odd-
   // even decoupling), so a seeded sawtooth cannot be corrected. The top radiative level (no i+1) falls
   // back to the one-sided form. Mutually exclusive with CLIMA_NETFLUX.
-  const bool centered = std::getenv("CLIMA_CENTERED") != nullptr;
+  constexpr bool centered = false;
 
   // CLIMA_LOCALRE: use DISORT's NATIVE per-layer heating  g_i = net_heating[i]/c_eff  for the radiative
   // levels (with net_heating_jacobian), instead of any difference of the LEVEL fluxes. net_heating =
@@ -540,7 +439,7 @@ void ClimaRCECorrection::calcCorrection(
   // differencing) it should neither excite nor null the sawtooth, AND it pins the optically-thin top
   // through the local Planck term B(T_i) (unlike the cumulative net flux, which collapsed it). Surface
   // and convective zones keep their genuine flux conditions. Mutually exclusive with NETFLUX/CENTERED.
-  const bool localre = std::getenv("CLIMA_LOCALRE") != nullptr;
+  constexpr bool localre = false;
 
   // CLIMA_NEWTONLIKE: Deuflhard "Newton-like" method (book sec 2.1.3): the ACCURATE flux-conservation
   // residual (heat-capacity-weighted flux-moment divergence (F[i]-F[i-1])/c_eff -- the genuine F=const
@@ -553,8 +452,8 @@ void ClimaRCECorrection::calcCorrection(
   // Jacobian with the dominant NHJ for the STEP -- exactly clima's structure (two-stream dominant Jacobian
   // + flux-divergence residual). Globalised by NLEQ-ERR. CLIMA_NL_NETHEAT switches the residual to the
   // solver's own net_heating (J-B form) for the residual-comparison experiment.
-  const bool newtonlike = std::getenv("CLIMA_NEWTONLIKE") != nullptr;
-  const bool nl_netheat = std::getenv("CLIMA_NL_NETHEAT") != nullptr;
+  constexpr bool newtonlike = false;
+  constexpr bool nl_netheat = false;
 
   // CLIMA_HSTEP: the diffusion-limit doc's Sec.7.4 configuration -- the DEFECT CORRECTION done properly.
   // The RESIDUAL stays the accurate multi-stream flux-conservation statement (the DEFAULT differenced form
@@ -572,7 +471,7 @@ void ClimaRCECorrection::calcCorrection(
   //                      diagonal) instead of the dense NFJ[0] row.
   //   CLIMA_HSTEP_ZONE : convective-zone row <- the telescoped SUM of the heating rows in the block
   //                      (F_upper - F_lower-1 = sum_i heating_i), instead of the NFJ difference.
-  const bool hstep      = std::getenv("CLIMA_HSTEP") != nullptr;
+  constexpr bool hstep = false;
   // Layer/level offset knob. DEFAULT 0 (collocated, no shift): the backend computes
   //   flux_divergence[l] = 4pi(1-omega)*(J[l] - B[l])
   // which is genuinely COLLOCATED at level l -- the "each interface uses the layer above"
@@ -581,8 +480,8 @@ void ClimaRCECorrection::calcCorrection(
   // diagonal and destroys dominance; -1 was tried and is worse. Kept only as a diagnostic knob.
   const int  hstep_off  = std::getenv("CLIMA_HSTEP_OFF") ? std::atoi(std::getenv("CLIMA_HSTEP_OFF")) : 0;
   const double hstep_sign = std::getenv("CLIMA_HSTEP_SIGN") ? std::atof(std::getenv("CLIMA_HSTEP_SIGN")) : -1.0;
-  const bool hstep_surf = hstep && std::getenv("CLIMA_HSTEP_SURF") != nullptr;
-  const bool hstep_zone = hstep && std::getenv("CLIMA_HSTEP_ZONE") != nullptr;
+  constexpr bool hstep_surf = false;
+  constexpr bool hstep_zone = false;
 
   // CLIMA_PTC: the UNIFIED construction (doc "The unified construction"). ONE moment-flux residual
   // everywhere, g_i = (F_net,i - target)/Fnorm + w_i g^RE_i, regularised by pseudo-transient continuation
@@ -591,7 +490,7 @@ void ClimaRCECorrection::calcCorrection(
   // term as kappa->0) in the optically-thin top. No tau seam: the flux residual is one physical object top
   // to bottom; the ratio term is a SECOND regularisation of it (and carries the stellar BC via num_i, the
   // direct beam in J), active only where F_net goes flat. One PTC step per call; the outer loop grows dt.
-  const bool ptc = std::getenv("CLIMA_PTC") != nullptr;
+  constexpr bool ptc = false;
 
   // CLIMA_PTC_BLEND: implement the doc's Eq. 19 SMOOTH sliding diagonal instead of the hard local-RE skin
   // overwrite. The hard split (overwrite for tau<tau_skin, pure flux+PTC below) leaves the handoff level
@@ -600,7 +499,7 @@ void ClimaRCECorrection::calcCorrection(
   // the optically-thin top, ->0 in the deep): g_i = (F_net-target)/Fnorm + w_i g^RE_i, with the Jacobian
   // gaining w_i d g^RE/dT (the Planck-slope diagonal that conditions the thin top continuously). No switch
   // surface, no overwrite -> no seam. The skin overwrite is disabled when this is on.
-  const bool ptc_blend = ptc && std::getenv("CLIMA_PTC_BLEND") != nullptr;
+  constexpr bool ptc_blend = false;
 
   // CLIMA_PTC_DEEPINT (doc Sec.6): in the optically-thick radiative deep, replace the slow PTC relaxation by
   // a DIRECT GRADIENT INTEGRATION. There the net-flux Jacobian is banded (tridiagonal) and the flux
@@ -608,7 +507,7 @@ void ClimaRCECorrection::calcCorrection(
   // through the well-conditioned off-diagonal dF_i/dT_{i+1} is O(n) and flux-exact -- no Rosseland mean, no
   // diagonal dominance. Diffusion-limit only, so it is weighted by the local-layer deepness and fades out
   // through the photosphere. Matters for the convection-OFF case / thick radiative stratospheres.
-  const bool deep_integration = ptc_blend && std::getenv("CLIMA_PTC_DEEPINT") != nullptr;
+  constexpr bool deep_integration = false;
 
   // CLIMA_LREANCHOR: with the collocated local-heating residual (CLIMA_LOCALRE), the heating Jacobian
   // is dense and has a near-null UNIFORM-temperature-level mode (local RE J=B is ~insensitive to a
@@ -616,7 +515,7 @@ void ClimaRCECorrection::calcCorrection(
   // huge Newton steps. Adding a weak un-differenced net-flux term eps*F[i]/Fstar to every radiative
   // residual restores a global energy-balance sensitivity that pins the DC mode WITHOUT differencing
   // (so it does not reintroduce the checkerboard). eps small keeps the local heating dominant.
-  const double lre_anchor = std::getenv("CLIMA_LREANCHOR") ? std::atof(std::getenv("CLIMA_LREANCHOR")) : 0.0;
+  constexpr double lre_anchor = 0.0;
 
   // CLIMA_RATIO_RE: the ratio-form local radiative-equilibrium residual for the radiative levels,
   //   g^RE_i = num_i/den_i - 1,   num_i = sum_k w_k kappa_k,i J_k,i,   den_i = sum_k w_k kappa_k,i B(nu_k,T_i),
@@ -663,7 +562,7 @@ void ClimaRCECorrection::calcCorrection(
   // so the ROOT (g=0 = true RCE) is unchanged -- only the iteration path avoids sawtooth space. The lost
   // global coupling = the absolute flux LEVEL, which is anchored separately (surface row + Unsoeld-Lucy /
   // ratio diagonal). Surface (i==0) and convective-zone rows stay DENSE (they ARE the global tether).
-  const bool tridiag = std::getenv("CLIMA_TRIDIAG") != nullptr;
+  constexpr bool tridiag = false;
 
   // per-level spectral sums for the ratio residual + its Jacobian, evaluated at a profile T against the
   // CURRENT radiation field (frozen opacity, so kappa = absorption_coeff matches the numerator Jacobian):
@@ -707,47 +606,20 @@ void ClimaRCECorrection::calcCorrection(
   // owns the optically-thin top (zeta->0, where F is insensitive to local T and the ratio diagonal is the
   // only conditioning), flux owns the thick deep (zeta->1, where g^RE=heating/den goes blind to the level).
   // tau is the Planck-mean cumulative ABSORPTION optical depth from the top, frozen over the inner solve.
-  const bool ratio_flux = std::getenv("CLIMA_RATIO_FLUX") != nullptr;   // opt-in flux anchor
+  constexpr bool ratio_flux = false;
   // default flux anchor = low-rank DEFLATION (driver); CLIMA_RATIO_PERLEVEL selects the old per-level
   // zeta-blend (kept for comparison; it fights the diagonal because the flux constraint is nonlocal).
-  const bool ratio_perlevel = std::getenv("CLIMA_RATIO_PERLEVEL") != nullptr;
+  constexpr bool ratio_perlevel = false;
   const double ratio_xi = std::getenv("CLIMA_RATIO_XI") ? std::atof(std::getenv("CLIMA_RATIO_XI")) : 1.0;
   const double ratio_tauscale = std::getenv("CLIMA_RATIO_ZETA_TAUSCALE") ? std::atof(std::getenv("CLIMA_RATIO_ZETA_TAUSCALE")) : 1.0;
-  const bool ratio_fluxdense = std::getenv("CLIMA_RATIO_FLUXDENSE") != nullptr;
+  constexpr bool ratio_fluxdense = false;
   std::vector<double> ratio_zeta(n, 0.0), ratio_tau(n, 0.0);
-  if (ratio && ratio_flux && ratio_perlevel)
-  {
-    std::vector<double> kP(n, 0.0);                   // Planck-mean absorption coeff per level
-    for (size_t i = 0; i < n; ++i)
-    {
-      double sB = 0.0, skB = 0.0;
-      for (size_t k = 0; k < ratio_nnu; ++k)
-      { const double B = disortpp::planckFunction2(ratio_wn[k], ratio_wn[k], atmosphere.temperature[i]);
-        sB += ratio_w[k]*B; skB += ratio_w[k]*opacity.absorption_coeff[k][i]*B; }
-      kP[i] = (sB > 0.0) ? skB/sB : 0.0;
-    }
-    for (size_t i = n-1; i > 0; --i)                  // cumulative from TOA (i=n-1) downward (altitude grows with i)
-      ratio_tau[i-1] = ratio_tau[i] + 0.5*(kP[i]+kP[i-1])*std::abs(atmosphere.altitude[i]-atmosphere.altitude[i-1]);
-    for (size_t i = 0; i < n; ++i) ratio_zeta[i] = ratio_tau[i] / (ratio_tau[i] + ratio_tauscale);
-    if (std::getenv("CLIMA_DBG"))
-      std::fprintf(stderr, "  [ratio-zeta] tau: top=%.2e bot=%.2e  zeta: top=%.3f bot=%.3f (tau_scale=%.2g xi=%.2g)\n",
-        ratio_tau[n-1], ratio_tau[0], ratio_zeta[n-1], ratio_zeta[0], ratio_tauscale, ratio_xi);
-  }
 
   // FROZEN least-squares scale calibrating the cumulative proxy to the actual net-flux deviation:
   // F_i - F_0 ~ ratio_flux_scale * cumF_i (auto-handles the 4*pi and unit factors). Computed once at the
   // committed point so the residual (xi g^RE + zeta*flux_scale*cumF/Fnorm) and the cumulative-heating
   // Jacobian stay a consistent Newton through the inner relaxation.
   double ratio_flux_scale = 0.0;
-  if (ratio && ratio_flux && ratio_perlevel)
-  {
-    std::vector<double> cumF0; cumFvec(atmosphere.temperature, cumF0);
-    double sxy = 0.0, sxx = 0.0;
-    for (size_t i = 0; i < n; ++i)
-    { const double dF = radiation_field.flux_total[i] - radiation_field.flux_total[0];
-      sxy += dF*cumF0[i]; sxx += cumF0[i]*cumF0[i]; }
-    ratio_flux_scale = (sxx > 0.0) ? sxy/sxx : 0.0;
-  }
 
   // Per-layer Planck-mean optical depth, to rescale the Newton-like step Jacobian. The accurate
   // conservation residual is the per-LAYER flux change F[i]-F[i-1] = net_heating[i]*dtau[i], but
@@ -758,7 +630,7 @@ void ClimaRCECorrection::calcCorrection(
   // the diffusion-limit note's Sec.2.4 open item -- whether the sawtooth amplitude tracks the ABSOLUTE
   // local layer thickness dtau_i (a numerator/truncation effect, ~dtau^3) rather than the thickness
   // contrast eps. Grid refinement varies both at once, so only a direct dtau measurement separates them.
-  const bool dumptau = std::getenv("CLIMA_DUMPTAU") != nullptr;
+  constexpr bool dumptau = false;
   std::vector<double> nl_dtau(n, 1.0);
   if ((newtonlike && !nl_netheat) || hstep || dumptau || lucy)   // CLIMA_HSTEP/LUCY need the per-layer dtau
   {
@@ -793,24 +665,6 @@ void ClimaRCECorrection::calcCorrection(
   // where PTC's C/dt diagonal does the conditioning. tau = Planck-mean cumulative ABSORPTION optical depth
   // from the top, frozen over the call.
   std::vector<double> ptc_w(n, 0.0), ptc_tau(n, 0.0);
-  if (ptc)
-  {
-    const double w0 = std::getenv("CLIMA_PTC_W0") ? std::atof(std::getenv("CLIMA_PTC_W0")) : 1.0;
-    const double tau_w = std::getenv("CLIMA_PTC_TAUW") ? std::atof(std::getenv("CLIMA_PTC_TAUW")) : 1.0;
-    const std::vector<double> w_int = aux::trapezoidalWeights(ratio_wn);
-    std::vector<double> kP(n, 0.0);
-    for (size_t i = 0; i < n; ++i)
-    {
-      double sB = 0.0, skB = 0.0;
-      for (size_t kk = 0; kk < ratio_nnu; ++kk)
-      { const double B = disortpp::planckFunction2(ratio_wn[kk], ratio_wn[kk], atmosphere.temperature[i]);
-        sB += w_int[kk]*B; skB += w_int[kk]*opacity.absorption_coeff[kk][i]*B; }
-      kP[i] = (sB > 0.0) ? skB/sB : 0.0;
-    }
-    for (size_t i = n-1; i > 0; --i)
-      ptc_tau[i-1] = ptc_tau[i] + 0.5*(kP[i]+kP[i-1])*std::abs(atmosphere.altitude[i]-atmosphere.altitude[i-1]);
-    for (size_t i = 0; i < n; ++i) ptc_w[i] = w0 * tau_w / (ptc_tau[i] + tau_w);
-  }
 
   // Per-level radiative time tau_rad ~ c_p/(kappa_P sigma T^3) (the local Newtonian-cooling time), used to
   // make the pseudo-timestep PER-LEVEL: dt_i = rho * s_i with s_i = tau_rad_i/<tau_rad>. The DEEP has short
@@ -818,25 +672,6 @@ void ClimaRCECorrection::calcCorrection(
   // net-flux Jacobian; the thin top has long tau_rad -> weak PTC, but it is the ratio anchor that conditions
   // the top there. rho is the single global pseudo-time, ramped by the Deuflhard rule in the driver.
   std::vector<double> ptc_srad(n, 1.0);
-  if (ptc && (ptc_blend || std::getenv("CLIMA_PTC_PERLEVEL")))   // per-level dt~tau_rad (Eq.20). IMPLIED by the
-  {                                               // blend (the ratio diagonal conditions the weak-reg top); else opt-in
-    const std::vector<double> w_int = aux::trapezoidalWeights(ratio_wn);
-    double mean = 0.0;
-    for (size_t i = 0; i < n; ++i)
-    {
-      double sB = 0.0, skB = 0.0;
-      for (size_t kk = 0; kk < ratio_nnu; ++kk)
-      { const double B = disortpp::planckFunction2(ratio_wn[kk], ratio_wn[kk], atmosphere.temperature[i]);
-        sB += w_int[kk]*B; skB += w_int[kk]*opacity.absorption_coeff[kk][i]*B; }
-      const double kP_i = (sB > 0.0) ? skB/sB : 0.0;
-      const double cp = ThermodynamicData::meanHeatCapacity(atmosphere.number_densities[i], atmosphere.temperature[i]);
-      const double T3 = std::pow(std::max(atmosphere.temperature[i], 1.0), 3);
-      ptc_srad[i] = cp / (std::max(kP_i, 1e-30) * T3);   // proportional to tau_rad (constant cancels in the mean)
-      mean += ptc_srad[i];
-    }
-    mean = std::max(mean / static_cast<double>(n), 1e-300);
-    for (size_t i = 0; i < n; ++i) ptc_srad[i] = std::max(1e-6, ptc_srad[i] / mean);   // normalised to mean 1
-  }
 
   // ---- Rosseland/Eddington DEEP preconditioner (CLIMA_PTC_ROSS; implied by the blend). The deep flux is
   // diffusive, F = -(4/3 kappa) d(sigma T^4)/dz, whose ONE-SIDED (interface) discretisation has a GENUINE,
@@ -854,39 +689,6 @@ void ClimaRCECorrection::calcCorrection(
   // experiment; the deep is the diffusion-limit doc's genuinely-hard regime -- in practice the terrestrial
   // deep is the CONVECTIVE troposphere (slaved), so this is moot there.
   std::vector<double> ross_diag(n, 0.0), ross_up(n, 0.0), ross_d(n, 0.0);
-  if (ptc && std::getenv("CLIMA_PTC_ROSS"))     // Rosseland preconditioner experiment only; the deep carve-out
-  {                                             // (CLIMA_PTC_DEEPINT) integrates the gradient instead (below)
-    const std::vector<double> w_int = aux::trapezoidalWeights(ratio_wn);
-    const double sigma_cgs = 5.670374e-5;                 // erg cm^-2 s^-1 K^-4
-    std::vector<double> kP(n, 0.0);
-    for (size_t i = 0; i < n; ++i)
-    {
-      double sB = 0.0, skB = 0.0;
-      for (size_t kk = 0; kk < ratio_nnu; ++kk)
-      { const double B = disortpp::planckFunction2(ratio_wn[kk], ratio_wn[kk], atmosphere.temperature[i]);
-        sB += w_int[kk]*B; skB += w_int[kk]*opacity.absorption_coeff[kk][i]*B; }
-      kP[i] = (sB > 0.0) ? skB/sB : 0.0;
-    }
-    // F_net[i] ~ -(4/3 kappa) (sigma T[i]^4 - sigma T[i-1]^4)/dz  (interface BELOW level i, toward the
-    // surface). Coupling DOWNWARD (to i-1) is essential: it puts each level's dependence on the warmer
-    // layer beneath it -- in particular L1's dependence on the hot surface L0 -- INTO that level's own row,
-    // so it can take a real warming step. (Coupling upward to i+1 instead buries L1's surface coupling in
-    // the overwritten surface row.) dF[i]/dT[i] = -pref T[i]^3 (NEGATIVE), dF[i]/dT[i-1] = +pref T[i-1]^3.
-    for (size_t i = 1; i < n; ++i)
-    {
-      const double kappa = 0.5*(kP[i]+kP[i-1]);
-      const double dz    = std::abs(atmosphere.altitude[i]-atmosphere.altitude[i-1]);
-      const double dtau  = std::max(kappa*dz, 1e-30);     // local layer optical thickness
-      const double pref  = 16.0*sigma_cgs/(3.0*dtau);
-      ross_diag[i] = -pref*std::pow(std::max(atmosphere.temperature[i],   1.0), 3);   // dF[i]/dT[i]   < 0
-      ross_up[i]   =  pref*std::pow(std::max(atmosphere.temperature[i-1], 1.0), 3);   // dF[i]/dT[i-1] > 0 (down-coupling)
-      ross_d[i]    = dtau/(dtau + 1.0);                   // -> 1 optically thick (diffusion valid), -> 0 thin
-    }
-    if (std::getenv("CLIMA_DBG"))
-      std::fprintf(stderr, "  [ross] ross_d: L0=%.3f L5=%.3f L20=%.3f L50=%.3f  diag0=%.2e nfj00=%.2e\n",
-                   ross_d[0], ross_d[std::min<size_t>(5,n-1)], ross_d[std::min<size_t>(20,n-1)],
-                   ross_d[std::min<size_t>(50,n-1)], ross_diag[0], radiation_field.net_flux_jacobian[0][0]);
-  }
 
   // ---- residual assembler: clima's heat-capacity-weighted flux DIFFERENCES over the reduced DOFs.
   // clima forms fluxes(i)=f_total(i)-f_total(i-1) (and fluxes(0)=f_total(0) at the surface), so we use
@@ -927,23 +729,8 @@ void ClimaRCECorrection::calcCorrection(
         const bool zone_fluxnorm = (netflux || ratio) && !std::getenv("CLIMA_ZONE_CEFF");
         g[r] = (F[z.upper] - f_lower) / (zone_fluxnorm ? Fnorm : ceff_zone[zi]);
       }
-      else if (ptc)                                  // moment-flux conservation; with CLIMA_PTC_BLEND the
-      {                                              // Eq.19 sliding ratio term is ADDED (smooth, no seam),
-        g[r] = (F[i] - target_flux) / Fnorm;         // else the optically-thin top is handled by the hard
-        if (ptc_blend)                               // local-RE SKIN overwrite in the driver.
-        {
-          double num, den, C; ratioSums(T, i, num, den, C);
-          // g^RE = num/den - 1 is numerically unstable as den -> 0 (the kappa->0 sampled line-gap top:
-          // num,den both -> 0, the ratio is noise). CLAMP the residual term: the conditioning diagonal
-          // -C/den = -dln(den)/dT stays finite there (added in rebuildJ), but the residual must be bounded
-          // so it cannot blow up the step. |num/den-1|<=1 (J within 2x of B); beyond that it is top noise.
-          double gre = (den > 0.0) ? (num / den - 1.0) : 0.0;
-          gre = std::max(-1.0, std::min(1.0, gre));
-          g[r] += ptc_w[i] * gre;                    // + w_i g^RE_i  (w_i -> 1 thin top, -> 0 deep)
-        }
-      }
       else if (i == 0)                               // surface DOF: F_net[0]=0 balance
-        g[r] = F[0] / (netflux ? Fnorm : ceff[0]);
+        g[r] = F[0] / ceff[0];
       else                                           // radiative level
       {
         // RCB HANDOVER. The collocated (ratio) residual is purely LOCAL, so for the first radiative level
@@ -959,7 +746,7 @@ void ClimaRCECorrection::calcCorrection(
                                       g[r] = (F[i] - F[i-1]) / ceff[i];   // flux continuity across the RCB
         else if (ratio)             { double num, den, C; ratioSums(T, i, num, den, C);
                                       const double gre = (den > 0.0) ? (num / den - 1.0) : 0.0;
-                                      const double gflux = (ratio_flux && ratio_perlevel) ? ratio_zeta[i]*ratio_flux_scale*cumF[i]/Fnorm : 0.0;
+                                      const double gflux = 0.0;
                                       // LEVEL ANCHOR: the ratio system is square (zone budget + one local-RE
                                       // row per radiative level), so nothing is left over to pin the absolute
                                       // flux LEVEL -- and Sec.4 guarantees the local-RE root is not flux
@@ -973,11 +760,7 @@ void ClimaRCECorrection::calcCorrection(
                                       if (lucy) {                       // full UL: level + gradient, in the residual
                                         const double Btot = 5.670374e-5*std::pow(std::max(T[i],1.0),4)/M_PI;
                                         glucy = lucy_sign * lucyB[i] / std::max(Btot, 1e-30); }
-                                      g[r] = ratio_xi*gre + gflux + glucy + lre_anchor * F[i] / Fnorm; }
-        else if (newtonlike)          g[r] = (nl_netheat ? NH[i] : NH[i]*nl_dtau[i]) / ceff[i]; // per-layer flux-change residual (NH*dtau), consistent with NHJ*dtau
-        else if (localre)             g[r] = NH[i] / ceff[i] + lre_anchor * F[i] / Fnorm;  // local heating + weak TOA-flux anchor
-        else if (netflux)             g[r] = F[i] / Fnorm;                          // per-level NET FLUX -> 0
-        else if (centered && i+1 < n) g[r] = 0.5*(F[i+1] - F[i-1]) / ceff[i];        // symmetric divergence
+                                      g[r] = ratio_xi*gre + gflux + glucy ; }
         else                          g[r] = (F[i] - F[i-1]) / ceff[i];             // one-sided backward (clima)
       }
     }
@@ -1003,64 +786,6 @@ void ClimaRCECorrection::calcCorrection(
   // (a Lambda iteration: J frozen this outer step, the driver re-solves RT between outer iterations).
   // The surface keeps the flux anchor F_net[0]=0 (the budget tether); convective zones stay slaved.
   // A per-iteration log-temperature cap is the blunt trust region against any residual convex overshoot.
-  if (std::getenv("CLIMA_LREJ"))
-  {
-    const std::vector<double>& wavenumber = radiation_field.spectral_grid->wavenumber_list;
-    const std::vector<double> w = aux::trapezoidalWeights(wavenumber);
-    const size_t nb_nu = wavenumber.size();
-    const double cap = std::getenv("CLIMA_LREJ_CAP") ? std::atof(std::getenv("CLIMA_LREJ_CAP")) : 0.1; // |dln T|
-    const double Tmax = 2.0 * (*std::max_element(T_base.begin(), T_base.end()));
-
-    std::vector<double> Tn = T_base;
-    for (size_t r = 0; r < m; ++r)
-    {
-      const size_t i = unk[r];
-      if (zone_of_dof[i] >= 0) continue;                 // convective-zone DOFs: handled by slaving below
-      double Ti;
-      if (i == 0)                                        // surface: 1-D flux balance F_net[0]=0
-      {
-        const double K00 = radiation_field.net_flux_jacobian[0][0];
-        const double dT = (std::abs(K00) > 1e-30) ? -radiation_field.flux_total[0] / K00 : 0.0;
-        Ti = T_base[0] + dT;
-      }
-      else                                               // radiative level: bracketed local RE B=<J>_kappa
-      {
-        double num = 0.0;
-        for (size_t k = 0; k < nb_nu; ++k)
-          num += w[k] * opacity.absorption_coeff[k][i] * radiation_field.mean_intensity[i][k];
-        Ti = solveLocalREBracket(num, w, wavenumber, opacity, i, T_base[i], Tmax);
-      }
-      // per-iteration log-temperature trust region (cap the convex-overshoot stride)
-      double dln = std::log(std::max(Ti, 1.0)) - std::log(std::max(T_base[i], 1.0));
-      dln = std::max(-cap, std::min(cap, dln));
-      Tn[i] = std::max(1.0, T_base[i] * std::exp(dln));
-    }
-    adiabatSnap(Tn);                                     // slave the convective interiors
-
-    std::vector<double> Ffin, NHfin;
-    forward_eval_full_(Tn, /*recompute_opacity=*/true, /*compute_jacobian=*/false, Ffin, NHfin);
-    double inner_change = 0.0;
-    for (size_t i = 0; i < n; ++i)
-      inner_change = std::max(inner_change, std::abs(Tn[i] - T_base[i]) / std::max(Tn[i], 1.0));
-    last_inner_change_ = inner_change;
-    atmosphere.temperature = Tn;
-
-    const double fnorm = radiation_field.flux_down_total.empty()
-      ? 1.0 : std::max(1.0, std::abs(radiation_field.flux_down_total.back()));
-    double fr = 0.0;
-    for (size_t r = 0; r < m; ++r)
-    {
-      const size_t i = unk[r];
-      const int zi = zone_of_dof[i];
-      double res;
-      if (zi >= 0) { const Zone& z = zones[zi]; const double low = (z.lower==0)?0.0:Ffin[z.lower-1]; res = Ffin[z.upper]-low; }
-      else if (i == 0) res = Ffin[0];
-      else res = Ffin[i] - Ffin[i-1];
-      fr = std::max(fr, std::abs(res) / fnorm);
-    }
-    last_residual_ = mask_big_change ? 1.0 : fr;
-    return;
-  }
   // evaluate the weighted residual g at xv. Opacity (and composition/structure) are FROZEN during the
   // inner solve (recompute_opacity=false), so the trial residuals are CONSISTENT with the Planck-only
   // Jacobian -- otherwise the omitted dsigma/dT term flips the residual gradient at optically-thin
@@ -1158,9 +883,8 @@ void ClimaRCECorrection::calcCorrection(
         else if (zi >= 0) { const Zone& z = zones[zi]; const double low = (z.lower==0)?0.0:NFJ[z.lower-1][l];
                             const bool zfn = (netflux || ratio) && !std::getenv("CLIMA_ZONE_CEFF");
                             row[l] = (NFJ[z.upper][l]-low)/(zfn ? Fnorm : ceff_zone[zi]); }  // must match assembleG
-        else if (ptc) row[l] = (1.0 - rd)*NFJ[i][l]/Fnorm;  // multi-stream NFJ faded out in the deep (rd->1); C/dt added in driver
         else if (i == 0 && hstep_surf) row[l] = 0.0;   // Sec.7.4: closed-form surface row, filled below
-        else if (i == 0) row[l] = NFJ[0][l]/(netflux ? Fnorm : ceff[0]);
+        else if (i == 0) row[l] = NFJ[0][l]/ceff[0];
         // xi*(1/den)d num/dT  +  zeta * d(F/Fstar)/dT. Flux Jacobian = the AGB cumulative-heating cumH
         // (calibrated, diagonally-dominant); CLIMA_RATIO_FLUXDENSE falls back to the raw dense NFJ.
         // RCB handover row: must MATCH the residual chosen in assembleG for this level, else the Newton
@@ -1168,10 +892,8 @@ void ClimaRCECorrection::calcCorrection(
         else if (ratio && i > 0 && (slaved[i-1] || zone_of_dof[i-1] >= 0) && !std::getenv("CLIMA_RATIO_NORCBFLUX"))
                         row[l] = (NFJ[i][l] - NFJ[i-1][l]) / ceff[i];
         else if (ratio) row[l] = ratio_xi * (MK[i][l] * ratio_inv)
-                               + ((ratio_flux && ratio_perlevel) ? ratio_zeta[i] * (ratio_fluxdense ? NFJ[i][l] : flux_scale*cumH[i][l]) / Fnorm : 0.0)
-                               + (lucy ? lucy_sign * lucyJ[i][l] / std::max(5.670374e-5*std::pow(std::max(atmosphere.temperature[i],1.0),4)/M_PI, 1e-30) : 0.0)
-                               + lre_anchor * NFJ[i][l] / Fnorm;   // level anchor (must match assembleG)
-        else if (newtonlike) row[l] = NHJ[i][l]*nl_dtau[i]/ceff[i];   // Newton-like: dominant heating Jac (*dtau matches the per-layer F-diff residual)
+                                                              + (lucy ? lucy_sign * lucyJ[i][l] / std::max(5.670374e-5*std::pow(std::max(atmosphere.temperature[i],1.0),4)/M_PI, 1e-30) : 0.0)
+                               ; // (level is handled by the Lucy term)
         // CLIMA_HSTEP (doc Sec.7.4): defect correction -- the accurate multi-stream FLUX residual is kept
         // (assembleG untouched), only the STEP moves to the collocated heating operator. NHJ is the per-tau
         // Jacobian d(dF/dtau)/dT, so NHJ*dtau[i] is the dominant surrogate of d(F[i]-F[i-1])/dT, matching
@@ -1187,11 +909,6 @@ void ClimaRCECorrection::calcCorrection(
         // of this residual is -NHJ*dtau/ceff. Using +NHJ flips the step exactly backwards -> M^-1 g is an
         // ASCENT direction at every step length (measured: rejected for lambda from 1 down to 1e-9 with a
         // sane ||s||~3e2), which is precisely how a trust region reports info=4/5 with zero accepted steps.
-        else if (hstep) { const int k = std::max(1, std::min<int>(n-1, (int)i + hstep_off));
-                          row[l] = hstep_sign*NHJ[k][l]*nl_dtau[i]/ceff[i]; }
-        else if (localre) row[l] = NHJ[i][l]/ceff[i] + lre_anchor * NFJ[i][l]/Fnorm;   // heating Jac + weak flux anchor
-        else if (netflux) row[l] = NFJ[i][l]/Fnorm;
-        else if (centered && i+1 < n) row[l] = 0.5*(NFJ[i+1][l]-NFJ[i-1][l])/ceff[i];
         else row[l] = (NFJ[i][l]-NFJ[i-1][l])/ceff[i];
       }
       if (i == 0 && hstep_surf)                     // Sec.7.4: the surface row is the closed-form emission
@@ -1225,14 +942,6 @@ void ClimaRCECorrection::calcCorrection(
     // and zone-anchor rows stay dense (the global energy tether). The diagonal is always retained, so the
     // ratio's strong restoring diagonal (-xi C_i/den_i) and the local 2nd-difference coupling survive --
     // exactly the structure that makes the Nyquist sawtooth the best-conditioned (not the null) direction.
-    if (tridiag)
-      for (size_t r = 0; r < m; ++r)
-      {
-        const size_t i = unk[r];
-        if (i == 0 || zone_of_dof[i] >= 0) continue;                 // keep surface + zone rows dense
-        for (size_t c = 0; c < m; ++c)
-          if (c + 1 < r || c > r + 1) J[r*m+c] = 0.0;                // zero everything off the tridiagonal band
-      }
     double Dmax = 0.0;
     for (size_t c = 0; c < m; ++c)
     {
@@ -1270,7 +979,7 @@ void ClimaRCECorrection::calcCorrection(
   // case, but in the radiative-CONVECTIVE case it feeds back through the convective mask detection
   // (penalty -> profile change -> mask over-grows -> surface collapses). Integrating it with convection
   // needs more care, so it is opt-in until then.
-  const double lam_s = std::getenv("CLIMA_SMOOTH") ? std::atof(std::getenv("CLIMA_SMOOTH")) : 0.0;
+  constexpr double lam_s = 0.0;
   double jscale = 0.0;
   {
     std::vector<double> dg;
@@ -1306,43 +1015,6 @@ void ClimaRCECorrection::calcCorrection(
       jscale, lam_s, ns, m, [&]{double s=0;for(double e:gbase)s+=e*e;return std::sqrt(s);}()); }
 
   // ---- full first-iteration dump for analysis (env CLIMA_DUMP; run with max_iterations=1) ----------
-  if (std::getenv("CLIMA_DUMP"))
-  {
-    const std::vector<std::vector<double>>& NFJ = radiation_field.net_flux_jacobian;
-    FILE* f;
-    f = std::fopen("/tmp/dump_meta.txt", "w");  std::fprintf(f, "%zu %zu\n", n, m); std::fclose(f);
-    f = std::fopen("/tmp/dump_levels.txt", "w");
-    for (size_t i=0;i<n;++i) std::fprintf(f, "%zu %.10e %.10e %.10e %.10e %.10e\n",
-      i, atmosphere.pressure[i], atmosphere.temperature[i], ceff[i],
-      radiation_field.flux_total[i], radiation_field.flux_down_total[i]);
-    std::fclose(f);
-    f = std::fopen("/tmp/dump_unk.txt", "w");  for (size_t r=0;r<m;++r) std::fprintf(f, "%zu\n", unk[r]); std::fclose(f);
-    f = std::fopen("/tmp/dump_g.txt", "w");    for (size_t r=0;r<m;++r) std::fprintf(f, "%.10e\n", gbase[r]); std::fclose(f);
-    f = std::fopen("/tmp/dump_D.txt", "w");    for (size_t c=0;c<m;++c) std::fprintf(f, "%.10e\n", D[c]); std::fclose(f);
-    f = std::fopen("/tmp/dump_NFJ.txt", "w");
-    for (size_t i=0;i<n;++i){ for (size_t j=0;j<n;++j) std::fprintf(f, "%.10e ", NFJ[i][j]); std::fprintf(f, "\n"); }
-    std::fclose(f);
-    f = std::fopen("/tmp/dump_J.txt", "w");
-    for (size_t r=0;r<m;++r){ for (size_t c=0;c<m;++c) std::fprintf(f, "%.10e ", J[r*m+c]); std::fprintf(f, "\n"); }
-    std::fclose(f);
-    // FINITE-DIFFERENCE Jacobian (frozen opacity) -- the TRUE dg/dx, for comparison with the analytic J.
-    {
-      std::vector<double> g0fd; evalG(x, /*want_jac=*/false, g0fd);
-      std::vector<double> Jfd(m*m, 0.0);
-      for (size_t c=0;c<m;++c)
-      {
-        std::vector<double> xp(x);
-        const double dd = 1e-3 * std::max(std::abs(x[c]), 1.0);
-        xp[c] += dd;
-        std::vector<double> gp; evalG(xp, /*want_jac=*/false, gp);
-        for (size_t r=0;r<m;++r) Jfd[r*m+c] = (gp[r]-g0fd[r])/dd;
-      }
-      f = std::fopen("/tmp/dump_Jfd.txt", "w");
-      for (size_t r=0;r<m;++r){ for (size_t c=0;c<m;++c) std::fprintf(f, "%.10e ", Jfd[r*m+c]); std::fprintf(f, "\n"); }
-      std::fclose(f);
-    }
-    std::fprintf(stderr, "  [dump] wrote /tmp/dump_*.txt incl. Jfd (n=%zu m=%zu)\n", n, m);
-  }
 
   (void) gbase;
 
@@ -1362,395 +1034,7 @@ void ClimaRCECorrection::calcCorrection(
   // residual's pole), so the convex-Wien-tail overshoot that blew up stock hybrj cannot occur. Same scheme
   // already proven on the flux residual; here the matrix is the strictly diagonally-dominant ratio Jacobian
   // so NO Laplacian regularisation is needed (the near-null flux-divergence J required it; this one does not).
-  if (ptc)
-  {
-    // ---- ONE pseudo-transient continuation step per call (BD/gas surface_anchored machinery, ported to
-    // target_flux=0). Solve (J + C/(rho s_i)) s = -g, J = (1-w)NFJ/Fnorm + w*(ratio Jac), C = ceff. The
-    // PER-LEVEL pseudo-timestep dt_i = rho*s_i (s_i = tau_rad/<tau_rad>) makes the deep strongly regularised
-    // (short tau_rad) and lets the ratio anchor condition the thin top. The single global pseudo-time rho is
-    // ramped by the DEUFLHARD ZIB-02-14 second-order rule: grow toward the Newton step when the linear model
-    // is accurate, shrink on nonlinearity or a residual rise. The driver's outer loop re-solves the RT.
-    const double lncap = std::getenv("CLIMA_PTC_LNCAP") ? std::atof(std::getenv("CLIMA_PTC_LNCAP")) : 0.5;
-    const double grow  = std::getenv("CLIMA_PTC_GROW")  ? std::atof(std::getenv("CLIMA_PTC_GROW"))  : 4.0;
-    // local RE is applied to the ENTIRE radiative column (every non-zone, non-surface level), not just
-    // the optically-thin skin. The bulk radiative zone (RCB..skin) must reach radiative equilibrium
-    // (F=const) for F[RCB] to equal F[TOA]=0; the coupled flux Newton cannot drive it (diffusion-limit
-    // null space -> dead ramp), but the monotone local-RE (Lambda) inversion B(T)=<J>_kappa does, exactly
-    // as the working LinearisedTemperatureCorrection does. tau_skin (default huge) keeps the old thin-skin
-    // -only behaviour available for A/B via CLIMA_PTC_TAUSKIN.
-    // under the blend the skin is the genuinely optically-thin top (tau<1 default); the blend handles the
-    // mid smoothly below it (no seam), the skin Planck-inverts the top robustly above it.
-    const double tau_skin = std::getenv("CLIMA_PTC_TAUSKIN") ? std::atof(std::getenv("CLIMA_PTC_TAUSKIN")) : (ptc_blend ? 1.0 : 1e30);
-    auto is_skin = [&](size_t r){ return ptc_tau[unk[r]] < tau_skin && zone_of_dof[unk[r]] < 0; };  // optically-thin top (Planck-inverted)
-    // cap the heat capacity in the PTC regularisation: the massive bottom layer has ceff ~1e9, which
-    // over-damps the surface (C/(rho Fnorm) huge -> frozen) and stops it pinning the flux constant. The
-    // cap lets it move at moderate rho while keeping the relative weighting through the bulk.
-    std::vector<double> sorted_ceff(ceff); std::sort(sorted_ceff.begin(), sorted_ceff.end());
-    const double ceff_cap = sorted_ceff[n/2] * (std::getenv("CLIMA_PTC_CEFFCAP") ? std::atof(std::getenv("CLIMA_PTC_CEFFCAP")) : 3.0);
-    auto Cof = [&](size_t i){ return std::min(ceff[i], ceff_cap); };
-    auto rms = [&](const std::vector<double>& v){ double s=0; for (double e:v) s+=e*e; return std::sqrt(s/static_cast<double>(std::max<size_t>(1,m))); };
-
-    std::vector<double> g;
-    evalG(x, /*want_jac=*/true, g); rebuildJ();
-    const double fnorm = rms(g);
-
-    // reference pseudo-time: c0 * MEDIAN per-level diagonal scale C_i/(s_i Fnorm). The median (not the mean)
-    // is essential with Eq.20 per-level s_i ~ tau_rad: the deep s_i is tiny, so the MEAN is dominated by the
-    // deep -> huge rho -> weak reg everywhere -> overshoot/runaway. The median is robust to that spread.
-    const double c0 = std::getenv("CLIMA_PTC_RHO0") ? std::atof(std::getenv("CLIMA_PTC_RHO0")) : 0.3;
-    double rho_ref;
-    { std::vector<double> dscale(m);
-      for (size_t r = 0; r < m; ++r) dscale[r] = Cof(unk[r])/(ptc_srad[unk[r]]*Fnorm);
-      std::sort(dscale.begin(), dscale.end());
-      rho_ref = c0 * dscale[m/2]; }
-
-    if (ptc_dt_ <= 0.0 || mask_changed)            // init rho so the MEDIAN diagonal starts DOMINANT (~1/c0)
-      ptc_dt_ = rho_ref;
-    else if ((ptc_blend || std::getenv("CLIMA_PTC_ZIB")) && ptc_glin_norm_ > 0.0)  // Deuflhard 2nd-order ramp
-    {                                              // (ZIB 02-14): the global multiplier on the per-level tau_rad,
-      // exactly as Eq.20 + the doc prescribe. DEFAULT under CLIMA_PTC_BLEND -- the blend has no skin/UL
-      // overwrite, so the linear-model prediction g_lin = g + J s is clean (not poisoned), and the second-
-      // order rule grows rho toward the Newton step when the model is accurate, shrinks it on nonlinearity.
-      double dnorm2 = 0.0;                          // ||G_measured - G_predicted||
-      for (size_t r = 0; r < m; ++r) { if (is_skin(r)) continue;
-        const double d = g[r] - ptc_glin_[unk[r]]; dnorm2 += d*d; }
-      const double dnorm = std::sqrt(dnorm2);
-      double ratio = (dnorm <= 1e-30) ? grow : ptc_num_ / (2.0*ptc_glin_norm_*dnorm);
-      ratio = std::min(std::max(ratio, 0.1), grow);
-      if (fnorm >= ptc_prev_fnorm_) ratio = std::min(ratio, 0.5);   // residual rose -> shrink (correction mode)
-      ptc_dt_ *= ratio;
-    }
-    else if (ptc_prev_fnorm_ > 0.0)                 // SER (switched evolution relaxation), DEFAULT.
-    {
-      // The ZIB second-order ramp compares the measured residual to the PTC step's LINEAR prediction
-      // g_lin; but the Unsoeld-Lucy uniform shift and the local-RE skin ALSO move x afterwards, so
-      // ||g - g_lin|| reads as wild nonlinearity and collapses rho -> 0 (the coupled step goes inert and
-      // the deep/RCB imbalance never clears). SER only looks at the residual NORM, immune to those
-      // overwrites: grow the pseudo-time in proportion to the residual drop, shrink on a rise. This is
-      // the classic Mulder-Van Leer continuation that drives steady-state CFD; it is what lets rho climb
-      // toward the Newton step so the surface/zone DOF can finally drive F[RCB] -> 0.
-      double ratio = (fnorm < ptc_prev_fnorm_)
-        ? std::min(grow, ptc_prev_fnorm_ / std::max(fnorm, 1e-30))
-        : 0.5;                                       // residual rose -> halve (correction mode)
-      ratio = std::min(std::max(ratio, 0.1), grow);
-      ptc_dt_ *= ratio;
-    }
-    // BAND-CLAMP rho around the dominant-diagonal reference. rho must never collapse below rho_ref/band
-    // (the recurring death-spiral: C/(rho s) -> inf -> steps freeze -> residual floors -> ramp shrinks more
-    // -> rho -> 0) nor run away above rho_ref*band (un-regularises the deficient deep K). The ZIB/SER rule
-    // only modulates rho WITHIN this band.
-    const double band = std::getenv("CLIMA_PTC_BAND") ? std::atof(std::getenv("CLIMA_PTC_BAND")) : 1e2;
-    ptc_dt_ = std::min(std::max(ptc_dt_, rho_ref/band), rho_ref*band);
-    ptc_prev_fnorm_ = fnorm;
-
-    // residual breakdown: WHERE does ||g|| live? report the largest |g[r]| and its level + tau (so we can
-    // tell a top-ratio floor from a deep-flux floor).
-    if (dbg) {
-      double mx=0; size_t lmx=0;
-      for (size_t r=0;r<m;++r) if (std::abs(g[r])>mx){ mx=std::abs(g[r]); lmx=unk[r]; }
-      std::fprintf(stderr,"  [ptc-g] max|g|=%.3e @L%zu (tau=%.2e w=%.2f zone=%d)\n",
-                   mx,lmx,ptc_tau[lmx],ptc_w[lmx],zone_of_dof[lmx]);
-    }
-
-    std::vector<double> A = J, s(m);
-    for (size_t r = 0; r < m; ++r)
-    {
-      // PTC heat-capacity diagonal, FADED OUT where the Rosseland deep preconditioner is active (rd->1):
-      // the strong C/dt was a crutch for the DEFICIENT K; with a genuine diagonally-dominant diffusion
-      // operator the deep no longer needs it and can take a real Newton step. (1-rd) keeps full PTC in the
-      // thin mid/top (where NFJ is still deficient and the ratio anchor conditions the very top).
-      const double rd = ross_d[unk[r]];
-      A[r*m+r] += (1.0 - rd) * Cof(unk[r])/(ptc_dt_*ptc_srad[unk[r]]*Fnorm);
-      s[r] = -g[r];
-    }
-    if (solveDenseLU(A, s, m))
-    {
-      // store the linear-model prediction G_lin = g + J s and the ramp scalars for the next call
-      if (ptc_glin_.size() != n) ptc_glin_.assign(n, 0.0);
-      double gl2 = 0.0, num = 0.0;
-      for (size_t r = 0; r < m; ++r)
-      { double gl = g[r]; for (size_t c = 0; c < m; ++c) gl += J[r*m+c]*s[c];
-        ptc_glin_[unk[r]] = gl; if (is_skin(r)) continue; gl2 += gl*gl; num += gl*(g[r]-gl); }
-      ptc_glin_norm_ = std::sqrt(gl2); ptc_num_ = std::abs(num);
-
-      double maxdln = 0.0;
-      for (size_t r = 0; r < m; ++r) maxdln = std::max(maxdln, std::abs(s[r])/std::max(x[r], 1.0));
-      const double sc = (maxdln > lncap) ? lncap/maxdln : 1.0;       // log-temperature safety cap (rarely binds)
-      for (size_t r = 0; r < m; ++r) x[r] = std::max(1.0, x[r] + sc*s[r]);
-
-      // ---- UNSOELD-LUCY uniform level shift (THE missing piece). The coupled flux-PTC step above drives
-      // the column SHAPE to radiative equilibrium (dF/dtau -> 0, so F_net -> const down the column), but the
-      // absolute LEVEL of that constant is pinned only by the single surface row and converges agonisingly
-      // slowly -- the exact observed stall: "F_net essentially constant throughout, just not zero, surface
-      // frozen". Drive the conserved net flux to zero DIRECTLY by a near-uniform fractional shift
-      // T -> T*(1+alpha) of the whole column, alpha the Newton step of the TOA net flux w.r.t. a uniform
-      // log-T change:  alpha = -(F_net(top) - target) / sum_j (dF_net(top)/dT_j) * T_j.  This is the classic
-      // Unsoeld-Lucy / Lambda-iteration level correction, and is precisely what the working
-      // LinearisedTemperatureCorrection PTC uses to set the level (it keeps only the surface in its Newton
-      // and relaxes the rest by local RE + this shift). Bounded per step; applied before the local-RE skin
-      // so the genuinely-thin top still ends on local RE. Disable with CLIMA_PTC_NOUL for A/B.
-      // RESTORED under the blend: for target=0 the deficient flux-K leaves the absolute LEVEL (the uniform-T
-      // null mode) unconstrained -> F_net settles to a constant != 0 and the surface freezes. UL drives that
-      // constant to zero. It does perturb the ZIB linear-model prediction, but the rho band-clamp prevents
-      // any runaway/freeze from that, and alpha -> 0 as F_net(TOA) -> 0 so the perturbation vanishes at
-      // convergence.
-      if (!std::getenv("CLIMA_PTC_NOUL"))
-      {
-        const size_t itoa = n - 1;
-        double denom = 0.0;
-        for (size_t j = 0; j < n; ++j) denom += radiation_field.net_flux_jacobian[itoa][j] * T_base[j];
-        const double Ftoa = radiation_field.flux_total[itoa] - target_flux;
-        if (std::abs(denom) > 1e-30)
-        {
-          double alpha = -Ftoa / denom;
-          alpha = std::max(-0.1, std::min(0.1, alpha));               // bound the per-iteration level move
-          for (size_t r = 0; r < m; ++r) x[r] = std::max(1.0, x[r] * (1.0 + alpha));
-          if (dbg) std::fprintf(stderr, "  [ptc-UL] Ftoa=%.4e alpha=%.4e\n", Ftoa, alpha);
-        }
-      }
-
-      // ---- LOCAL-RE SKIN: overwrite the optically-thin top (tau < tau_skin) by DIRECTLY converting the
-      // absorbed mean intensity to a temperature via the Planck function: solve B(T_i)=<J>_kappa (emitted =
-      // absorbed). kappa there is SMALL but NONZERO, so this inversion is well-defined and robust -- unlike
-      // the ratio g^RE=num/den-1 (fragile as den->0). The insensitive net-flux residual cannot determine T
-      // there; the stellar beam is in num_i (the top BC). RUNS UNDER THE BLEND TOO: the blend handles the mid
-      // smoothly below tau_skin (no hard seam), the skin Planck-inverts the genuinely-thin top above it.
-      {
-      const std::vector<double>& sk_wn = radiation_field.spectral_grid->wavenumber_list;
-      const std::vector<double> sk_w = aux::trapezoidalWeights(sk_wn);
-      const size_t sk_nnu = sk_wn.size();
-      double Tmax = 1.0; for (size_t r = 0; r < m; ++r) Tmax = std::max(Tmax, x[r]); Tmax *= 2.0;
-      for (size_t r = 0; r < m; ++r)
-      {
-        const size_t i = unk[r];
-        if (i == 0 || zone_of_dof[i] >= 0) continue;            // surface stays the flux anchor; zones slaved
-        // SMOOTH skin handoff: blend the Planck-inverted T into the stepped T with the SAME smooth weight
-        // sig = ptc_w[i] (->1 thin top, ->0 deep) instead of a HARD overwrite below tau_skin. A hard switch
-        // leaves the boundary level conditioned by neither side -> the residual ~0.1 bar (tau~1) kink. With
-        // the smooth weight the skin fades in continuously: deep (sig~0) = pure blend step, top (sig~1) =
-        // pure Planck inversion, no switch surface. Deep levels are near LTE (J~B) so T_skin~T anyway.
-        const double sig = ptc_w[i];
-        if (sig < 1e-3) continue;                               // negligible skin weight -> skip the root-find
-        double num = 0.0;
-        for (size_t k = 0; k < sk_nnu; ++k) num += sk_w[k]*opacity.absorption_coeff[k][i]*radiation_field.mean_intensity[i][k];
-        const double Tskin = solveLocalREBracket(num, sk_w, sk_wn, opacity, i, x[r], Tmax);
-        x[r] = std::max(1.0, (1.0 - sig)*x[r] + sig*Tskin);
-      }
-      }
-
-      // ---- DIRECT SURFACE ENERGY BALANCE (the surface analog of the top Planck inversion). The surface
-      // flux Jacobian NFJ[0][0] = 4 eps sigma T[0]^3 is the GENUINE surface-emission response (not the
-      // deficient interior odd-moment diagonal), so drive F_net[0]=0 by a direct 1-D Newton on T[0] from
-      // the committed point: dT = -F_net[0]/NFJ[0][0]. This uses the surface's own (effectively large) time
-      // step, as its high heat capacity demands, instead of the atmospheric tau_rad that froze it. Bounded
-      // per call. Replaces the (frozen) PTC step for the surface DOF only. Disable with CLIMA_PTC_NOSURFBAL.
-      if (ptc_blend && !std::getenv("CLIMA_PTC_NOSURFBAL"))
-        for (size_t r = 0; r < m; ++r)
-        {
-          if (unk[r] != 0 || zone_of_dof[0] >= 0) continue;          // only the BOA-tied surface (no conv zone)
-          const double K00 = radiation_field.net_flux_jacobian[0][0];
-          if (std::abs(K00) <= 1e-30) continue;
-          double dT = -radiation_field.flux_total[0] / K00;          // 1-D Newton on the surface balance
-          const double cap = 0.1 * std::max(T_base[0], 1.0);         // bound the per-call move
-          dT = std::max(-cap, std::min(cap, dT));
-          x[r] = std::max(1.0, T_base[0] + dT);
-          if (dbg) std::fprintf(stderr, "  [ptc-surf] F[0]=%.3e K00=%.3e dT=%.3f T0=%.2f\n",
-                                radiation_field.flux_total[0], K00, dT, x[r]);
-        }
-
-      // The optically-thick deep is carved out of the Newton (deep[]/kdeep) and reconstructed by gradient
-      // integration AFTER buildProfile -- see the "DEEP GRADIENT INTEGRATION" block near the commit. Nothing
-      // to do here: those DOFs are not in unk.
-    }
-    if (dbg) std::fprintf(stderr, "  [ptc%s] rho=%.3e ||g||=%.3e\n", ptc_blend?"-blend":"", ptc_dt_, fnorm);
-  }
-  else if (ratio && ratio_flux && ratio_perlevel)
-  {
-    // ---- AGB-style fixed-omega damped Newton (matching the AGB linearised corrector). The
-    // zeta-flux term makes the residual depend NONLOCALLY on T (the flux at i integrates all heating
-    // below), so the inner Jacobian cannot be made diagonally dominant and an inner Newton-to-convergence
-    // (NLEQ-ERR) over-damps to lambda_min and stalls. The AGB instead takes ONE under-relaxed step per RT
-    // solve and lets the outer loop re-solve the opacity/RT; we do the same -- a few omega-relaxed steps
-    // with a small sign-preserving Tikhonov floor (keeps empty rows non-singular) and a log-temperature
-    // cap (bounds the stride on the unbounded ratio pole), no monotonicity gate.
-    const int    maxit = std::getenv("CLIMA_RATIO_MAXIT") ? std::atoi(std::getenv("CLIMA_RATIO_MAXIT")) : 8;
-    const double omega = std::getenv("CLIMA_RATIO_OMEGA") ? std::atof(std::getenv("CLIMA_RATIO_OMEGA")) : 0.3;
-    const double lncap = std::getenv("CLIMA_RATIO_LNCAP") ? std::atof(std::getenv("CLIMA_RATIO_LNCAP")) : 0.1;
-    const double gtol  = std::getenv("CLIMA_RATIO_GTOL")  ? std::atof(std::getenv("CLIMA_RATIO_GTOL"))  : 1e-6;
-    std::vector<double> g;
-    int it = 0; double gmax = 0.0;
-    for (; it < maxit; ++it)
-    {
-      evalG(x, /*want_jac=*/true, g); rebuildJ();
-      gmax = 0.0; for (double e : g) gmax = std::max(gmax, std::abs(e));
-      if (gmax < gtol) break;
-
-      std::vector<double> A = J, b(m);
-      double dmean = 0.0; for (size_t r = 0; r < m; ++r) dmean += std::abs(A[r*m+r]);
-      dmean /= static_cast<double>(m);
-      const double reg = 1e-6 * (dmean + 1e-300);                       // sign-preserving Tikhonov floor
-      for (size_t r = 0; r < m; ++r) A[r*m+r] += (A[r*m+r] >= 0.0 ? reg : -reg);
-      for (size_t r = 0; r < m; ++r) b[r] = -g[r];
-      if (!solveDenseLU(A, b, m)) break;
-
-      double maxdln = 0.0;                                              // log-temperature trust cap
-      for (size_t r = 0; r < m; ++r) maxdln = std::max(maxdln, std::abs(b[r])/std::max(x[r], 1.0));
-      const double sc = (maxdln > lncap) ? lncap/maxdln : 1.0;
-      for (size_t r = 0; r < m; ++r) x[r] = std::max(1.0, x[r] + omega*sc*b[r]);
-    }
-    if (dbg) std::fprintf(stderr, "  [omega-ratio] iters=%d omega=%.2f ||g||inf=%.3e\n", it, omega, gmax);
-  }
-  else if (ratio && ratio_flux)
-  {
-    // ---- ALTERNATING deflation (ratio-converge, then a flux-only step in the soft subspace). The fully
-    // coupled deflated Newton g_def = g^RE + P_Vk(F) grinds because pushing the flux re-violates local RE
-    // inside one residual. Instead alternate two phases that DON'T fight:
-    //   (A) converge the pure ratio g^RE (NLEQ-ERR) -> smooth profile, F = const (the photosphere shape);
-    //   (B) take ONE flux-correcting step RESTRICTED to span{V_k}, the k softest right-singular vectors of
-    //       J_ratio. Since J_ratio V_k ~ 0, a step along V_k is nearly INVISIBLE to g^RE -- it moves the
-    //       flux without re-violating the ratio. The step solves the k-dim least squares min||(NFJ/Fnorm)
-    //       V_k y + F/Fnorm|| (project the flux deviation onto what the soft modes can reach), dT = V_k y.
-    // The driver's outer loop supplies the A/B alternation and the opacity update between calls.
-    const int    kdef   = std::getenv("CLIMA_RATIO_DEFLATE_K") ? std::atoi(std::getenv("CLIMA_RATIO_DEFLATE_K")) : 8;
-    const int    nratio = std::getenv("CLIMA_RATIO_NRATIO") ? std::atoi(std::getenv("CLIMA_RATIO_NRATIO")) : 40;
-    const double xtol   = std::getenv("CLIMA_RATIO_XTOL")  ? std::atof(std::getenv("CLIMA_RATIO_XTOL"))  : 1e-7;
-    const double lncap  = std::getenv("CLIMA_RATIO_LNCAP") ? std::atof(std::getenv("CLIMA_RATIO_LNCAP")) : 0.1;
-    constexpr double lambda_min = 1e-4;
-    const int k = std::min(kdef, static_cast<int>(m));
-    std::vector<double> g;
-
-    auto scaledNorm = [&](const std::vector<double>& v, const std::vector<double>& xc) {
-      double s2 = 0.0; for (size_t r = 0; r < m; ++r) { const double sc = std::max(xc[r], 1.0); s2 += (v[r]/sc)*(v[r]/sc); }
-      return std::sqrt(s2 / static_cast<double>(m)); };
-    auto allFinite = [&](const std::vector<double>& v) { for (double e : v) if (!std::isfinite(e)) return false; return true; };
-
-    // ---- Phase A: NLEQ-ERR on the pure ratio residual ----
-    double lambda = 1.0; int ai = 0; double gmax = 0.0;
-    for (; ai < nratio; ++ai)
-    {
-      evalG(x, /*want_jac=*/true, g); rebuildJ();
-      gmax = 0.0; for (double e : g) gmax = std::max(gmax, std::abs(e));
-      std::vector<double> A = J, b(m); for (size_t r = 0; r < m; ++r) b[r] = -g[r];
-      if (!solveDenseLU(A, b, m)) break;
-      const std::vector<double> dx = b; const double ndx = scaledNorm(dx, x);
-      if (ndx < xtol) break;
-      double lam = std::min(1.0, 2.0*lambda); double lam_acc = -1.0; std::vector<double> x_acc;
-      for (int trial = 0; trial < 25; ++trial)
-      {
-        std::vector<double> xt(m), gt; for (size_t r = 0; r < m; ++r) xt[r] = std::max(1.0, x[r] + lam*dx[r]);
-        evalG(xt, false, gt); double theta = 1e300;
-        if (allFinite(gt)) { std::vector<double> A2 = J, b2(m); for (size_t r = 0; r < m; ++r) b2[r] = -gt[r];
-          if (solveDenseLU(A2, b2, m) && allFinite(b2)) theta = scaledNorm(b2, xt)/ndx; }
-        if (theta <= 1.0 - 0.25*lam) { lam_acc = lam; x_acc = xt; break; }
-        if (lam <= lambda_min)       { lam_acc = lam; x_acc = xt; break; }
-        lam = std::max(0.5*lam, lambda_min);
-      }
-      if (lam_acc <= 0.0) break; x = x_acc; lambda = lam_acc;
-    }
-
-    // ---- Phase B: one flux-only step confined to span{V_k} ----
-    evalG(x, /*want_jac=*/true, g); rebuildJ();              // ratio converged; read J, NFJ, F at x
-    Eigen::MatrixXd Jm(m, m);
-    for (size_t r = 0; r < m; ++r) for (size_t c = 0; c < m; ++c) Jm(r,c) = J[r*m+c];
-    Eigen::BDCSVD<Eigen::MatrixXd> svd(Jm, Eigen::ComputeThinV);
-    Eigen::MatrixXd Vk = svd.matrixV().rightCols(k);
-
-    // (1) SMOOTH the deflation subspace. The ratio's deep soft modes are ~50% Nyquist energy (rough): the
-    // flux least-squares then SELECTS those rough directions and deposits a deep sawtooth (the diagonally-
-    // deficient flux operator NFJ has been handed authority over the level-to-level structure, which it
-    // populates in the checkerboard null space). We deny it that subspace: low-pass each column of V_k and
-    // re-orthonormalise, so the flux step dT = V_k y is smooth BY CONSTRUCTION. A flux constant/offset
-    // correction is intrinsically smooth, so this loses ~nothing of the flux reduction.
-    if (std::getenv("CLIMA_RATIO_ROUGHVK") == nullptr)
-    {
-      const int npass = std::getenv("CLIMA_RATIO_VKSMOOTH") ? std::atoi(std::getenv("CLIMA_RATIO_VKSMOOTH")) : 2;
-      for (int p = 0; p < npass; ++p)
-      {
-        Eigen::MatrixXd Vs = Vk;
-        for (size_t r = 1; r+1 < m; ++r)
-        {
-          const size_t i = unk[r];
-          if (i == 0 || zone_of_dof[i] >= 0) continue;
-          if (unk[r-1] != i-1 || unk[r+1] != i+1) continue;       // adjacent free levels only
-          if (slaved[i] || slaved[i-1] || slaved[i+1]) continue;
-          Vs.row(r) = 0.25*Vk.row(r-1) + 0.5*Vk.row(r) + 0.25*Vk.row(r+1);   // 1-2-1 low-pass
-        }
-        Vk = Vs;
-      }
-      Eigen::HouseholderQR<Eigen::MatrixXd> qr(Vk);                // re-orthonormalise (thin Q)
-      Vk = qr.householderQ() * Eigen::MatrixXd::Identity(m, k);
-    }
-
-    Eigen::VectorXd Fres(m);
-    for (size_t r = 0; r < m; ++r) Fres(r) = radiation_field.flux_total[unk[r]]/Fnorm;
-    Eigen::VectorXd dT(m);
-    if (std::getenv("CLIMA_RATIO_HPREC"))
-    {
-      // OPTION 2: set the flux step direction with the diagonally-DOMINANT heating Jacobian H = M - C
-      // (M = meanint_kappa_jacobian, C = sum w kappa dB/dT), not the diagonally-deficient NFJ. NFJ has no
-      // local diagonal, so it populates the checkerboard null space (the sawtooth); H carries the -C Planck
-      // diagonal, so the step structure it sets is smooth by the operator itself. NFJ is NOWHERE in the
-      // step -- only in the residual (exact F), so it still converges to F=0. Confined to span{V_k} for
-      // conditioning (H is dominant but den-scaled -> singular at the kappa->0 top). Solve (V_k^T H V_k) y =
-      // V_k^T Fres; sign handled by the +/- line search below.
-      const std::vector<std::vector<double>>& MK2 = radiation_field.meanint_kappa_jacobian;
-      std::vector<double> Cred(m, 0.0);
-      for (size_t r = 0; r < m; ++r) { double nu, de, C; ratioSums(atmosphere.temperature, unk[r], nu, de, C); Cred[r] = C; }
-      Eigen::MatrixXd Hred(m, m);
-      for (size_t r = 0; r < m; ++r) for (size_t c = 0; c < m; ++c)
-        Hred(r,c) = MK2[unk[r]][unk[c]] - (r==c ? Cred[r] : 0.0);
-      Eigen::MatrixXd HV = Vk.transpose()*Hred*Vk;          // k x k: dominant operator in the subspace
-      Eigen::VectorXd y = HV.fullPivLu().solve(Vk.transpose()*Fres);
-      dT = Vk*y;
-    }
-    else
-    {
-      // OPTION 1 (default): least-squares flux reduction via NFJ projected onto the (smoothed) soft subspace.
-      Eigen::MatrixXd NFJm(m, m);
-      for (size_t r = 0; r < m; ++r) for (size_t c = 0; c < m; ++c)
-        NFJm(r,c) = radiation_field.net_flux_jacobian[unk[r]][unk[c]]/Fnorm;
-      Eigen::MatrixXd Aflux = NFJm*Vk;                       // m x k : flux response to soft-mode moves
-      Eigen::VectorXd y = (Aflux.transpose()*Aflux).ldlt().solve(-(Aflux.transpose()*Fres));
-      dT = Vk*y;                                             // flux-only step (ratio-invisible)
-    }
-
-    // The ratio's DEEP soft modes (optically-thick, local RE degenerate) include grid-scale/Nyquist
-    // directions, so the unconstrained flux step injects a sawtooth in the lower atmosphere. One Shapiro
-    // pass on the STEP annihilates the Nyquist component exactly (alpha=1) while keeping the smooth
-    // flux-reducing part -- the flux deviation is a smooth quantity, so its correction should be too.
-    // Interior free radiative levels only (both neighbours adjacent free levels; not surface/zone/slaved).
-    // Default OFF now -- the smooth-V_k subspace (fix 1) makes the step smooth by construction; this is the
-    // option-3 guard rail, kept available via CLIMA_RATIO_STEPSMOOTH.
-    if (std::getenv("CLIMA_RATIO_STEPSMOOTH") != nullptr)
-    {
-      Eigen::VectorXd dTs = dT;
-      for (size_t r = 1; r+1 < m; ++r)
-      {
-        const size_t i = unk[r];
-        if (i == 0 || zone_of_dof[i] >= 0) continue;
-        if (unk[r-1] != i-1 || unk[r+1] != i+1) continue;     // require adjacent free levels
-        if (slaved[i] || slaved[i-1] || slaved[i+1]) continue;
-        dTs(r) = dT(r) + 0.25*(dT(r-1) - 2.0*dT(r) + dT(r+1));
-      }
-      dT = dTs;
-    }
-    double maxdln = 0.0; for (size_t r = 0; r < m; ++r) maxdln = std::max(maxdln, std::abs(dT(r))/std::max(x[r], 1.0));
-    const double base = (maxdln > lncap) ? lncap/maxdln : 1.0;
-    const double f0 = Fres.norm(); double t = base; bool acc = false;   // backtrack on ||F/Fnorm||, both signs
-    for (int ls = 0; ls < 14 && !acc; ++ls)
-    {
-      for (double s : {1.0, -1.0})
-      {
-        std::vector<double> xt(m), gt; for (size_t r = 0; r < m; ++r) xt[r] = std::max(1.0, x[r] + s*t*dT(r));
-        evalG(xt, false, gt);
-        Eigen::VectorXd Frt(m); for (size_t r = 0; r < m; ++r) Frt(r) = radiation_field.flux_total[unk[r]]/Fnorm;
-        if (std::isfinite(Frt.norm()) && Frt.norm() < f0) { x = xt; acc = true; break; }
-      }
-      t *= 0.5;
-    }
-    if (dbg) std::fprintf(stderr, "  [defl-alt] ratioIters=%d k=%d ||gRE||inf=%.2e ||F/Fn||=%.3e step=%.2f\n", ai, k, gmax, f0, t);
-  }
-  else if (ratio || newtonlike)
+  if (ratio || newtonlike)
   {
     // NLEQ-ERR (Deuflhard) affine-covariant damped Newton -- used both for the pure ratio residual and for
     // the Newton-like flux-conservation mode (accurate flux divergence residual + dominant NHJ step Jacobian).
@@ -1858,52 +1142,7 @@ void ClimaRCECorrection::calcCorrection(
     // info=4/5 with max|dT/T| = 0. Sec.7.1 instead prescribes  T <- T - M^-1 G(T)  with a line
     // search on ||G|| only. This is that iteration, so the stall can be attributed to the OPERATOR
     // rather than to the globalisation. Pair with CLIMA_HSTEP to test M = collocated heating H.
-    if (std::getenv("CLIMA_FPSTEP"))
     {
-      const int    fp_it  = std::getenv("CLIMA_FP_ITER") ? std::atoi(std::getenv("CLIMA_FP_ITER")) : 20;
-      const double fp_tol = std::getenv("CLIMA_FP_TOL")  ? std::atof(std::getenv("CLIMA_FP_TOL"))  : 1e-12;
-      auto l2 = [](const std::vector<double>& v){ double s=0.0; for (double e : v) s += e*e; return std::sqrt(s); };
-      std::vector<double> g;
-      evalG(x, /*want_jac=*/true, g);
-      double gn = l2(g);
-      const double gn_first = gn;
-      int it = 0, nrej = 0;
-      for (; it < fp_it && gn > fp_tol; ++it)
-      {
-        rebuildJ();                                        // M at the current point
-        std::vector<double> A(J), rhs(m);
-        for (size_t r = 0; r < m; ++r) rhs[r] = -g[r];
-        if (!solveDenseLU(A, rhs, m)) { if (dbg) std::fprintf(stderr, "  [fp] LU fail at it=%d\n", it); break; }
-        // DEEP backtracking: H has a NEAR-NULL DC (flux-level) mode -- its eigenvalue is -E2 ~ e^-dtau
-        // (doc Sec.7.4) -- so M^-1 hugely amplifies the level component of a flux-conservation residual
-        // and ||s|| can be astronomical. Halving only ~8 times cannot distinguish "ascent direction"
-        // from "descent direction, absurd step length", so allow lambda down to ~1e-9.
-        const int ls_max = std::getenv("CLIMA_FP_LS") ? std::atoi(std::getenv("CLIMA_FP_LS")) : 30;
-        double sn = 0.0, smax = 0.0;
-        for (size_t r = 0; r < m; ++r) { sn += rhs[r]*rhs[r]; smax = std::max(smax, std::abs(rhs[r])); }
-        sn = std::sqrt(sn);
-        double lam = 1.0; bool accepted = false; double lam_acc = 0.0;  // backtrack on ||G|| ONLY
-        for (int ls = 0; ls < ls_max; ++ls)
-        {
-          std::vector<double> xt(m);
-          for (size_t r = 0; r < m; ++r) xt[r] = std::max(1.0, x[r] + lam*rhs[r]);
-          std::vector<double> gt; evalG(xt, /*want_jac=*/false, gt);
-          const double gtn = l2(gt);
-          if (gtn < gn) { x = xt; gn = gtn; accepted = true; lam_acc = lam; break; }
-          lam *= 0.5;
-        }
-        if (dbg && it < 3)
-          std::fprintf(stderr, "  [fp:step] it=%d ||s||=%.3e max|s|=%.3e  accepted=%d lambda=%.3e ||G||=%.3e\n",
-                       it, sn, smax, (int)accepted, lam_acc, gn);
-        if (!accepted) { ++nrej; break; }                  // no descent even at lambda~1e-9 -> ascent dir
-        evalG(x, /*want_jac=*/true, g);                    // refresh radiation field for the next M
-        gn = l2(g);
-      }
-      if (dbg)
-        std::fprintf(stderr, "  [fp] iters=%d ||G||: %.3e -> %.3e  (ratio %.3f/it)  rejected=%d\n",
-                     it, gn_first, gn, (it > 0 && gn_first > 0.0) ? std::pow(gn/gn_first, 1.0/it) : 1.0, nrej);
-    }
-    else {
     Eigen::VectorXd xe(m); for (size_t r=0;r<m;++r) xe[(int)r] = x[r];
     Eigen::HybridNonLinearSolver<RceHybrjFunctor> solver(functor);
     solver.parameters.maxfev = std::getenv("CLIMA_MAXFEV") ? std::atoi(std::getenv("CLIMA_MAXFEV")) : 120;
@@ -1960,88 +1199,13 @@ void ClimaRCECorrection::calcCorrection(
   // not follow T0 -- so there is no leaf->root runaway (the SURFACE anchor + upward sweep does run away because
   // its 1-D K00 misses the deep-following term). The historical alternative was a coupled surface+deep BC, held
   // in reserve should a residual non-diffusive surface-jump seam survive the grey-floor fallback.
-  if (carve_deep && kdeep >= 2 && !radiation_field.flux_net_thermal_total.empty())
-  {
-    const std::vector<double>& Fth  = radiation_field.flux_net_thermal_total;
-    const std::vector<double>& Ftot = radiation_field.flux_total;
-    const double sig = 5.670374e-5;
-    auto Bof = [&](double T){ return sig*T*T*T*T/M_PI; };
-    auto Tof = [&](double B){ return std::pow(std::max(B,1e-30)*M_PI/sig, 0.25); };
-    const double rmin = 0.2, rmax = 5.0, ffloor = 1.0;
-    constexpr double Kgrey = 4.0*M_PI/3.0;                        // grey diffusivity F = -(4pi/3) dB/dtau (B = sigma T^4/pi)
-    std::vector<double> Bn(n, 0.0);
-    Bn[kdeep+1] = Bof(T_final[kdeep+1]);                          // anchor: the photosphere DOF (Newton value)
-    const int ibot = (deep[0] ? 0 : 1);                          // sweep through the surface when it is carved
-    double Keff = 0.0;                                            // diffusivity Fth*dtau/dB_down, calibrated from clean layers above
-    for (int i = kdeep; i >= ibot; --i)
-    {
-      const double dB_old = Bof(T_base[i+1]) - Bof(T_base[i]);    // current Planck increment, layer i
-      const double Ftar   = Fth[i] - Ftot[i];                    // target thermal flux = -F_stellar (Eq.30)
-      // Where the carried-flux ratio is well conditioned (non-flat layer carrying real flux), rescale the
-      // current Planck increment multiplicatively by F_star/F_th -- this IS the measured-D form. At a FLAT spot
-      // the measured D = -dtau*Fth/dB_old is 0/0, so the multiplicative form collapses (ratio*0=0) and cannot
-      // build the flux-carrying gradient -- the old linear-extrapolation/freeze band-aids patched T but left the
-      // flux seamed (notably F1 at the surface-air jump). Instead apply the doc's grey-floor fallback: the
-      // ABSOLUTE gradient dB_down = F_star*dtau/K that carries the target flux regardless of the current
-      // increment. K is read from the last clean layer above (unit-safe, the solver's own diffusivity), falling
-      // back to the grey 4pi/3 until one has calibrated it.
-      const bool flat = (i + 2 <= kdeep + 1) && std::abs(dB_old) < 0.7 * std::abs(Bn[i+1] - Bn[i+2]);
-      double dB_down;                                            // Planck increment going down across layer i (Bn[i]-Bn[i+1] > 0)
-      if (!flat && std::abs(Fth[i]) > ffloor)
-      {
-        const double ratio = std::max(rmin, std::min(rmax, 1.0 - Ftot[i]/Fth[i]));   // F_star/F_th, clamped O(1)
-        dB_down = -dB_old * ratio;                               // measured-D multiplicative rescaling
-        if (std::abs(dB_down) > 1e-30 && Fth[i]*dB_down > 0.0)    // calibrate K from this clean, consistent-sign layer
-          Keff = Fth[i] * deep_dtau[i] / dB_down;
-      }
-      else
-      {
-        const double K = (Keff > 1e-30) ? Keff : Kgrey;          // grey-floor absolute flux-carrying gradient
-        dB_down = Ftar * deep_dtau[i] / K;
-      }
-      Bn[i] = Bn[i+1] + dB_down;                                 // one-sided downward integration
-      T_final[i] = std::max(1.0, Tof(Bn[i]));
-    }
-    if (std::getenv("CLIMA_DBG"))
-    {
-      const double Ft0 = Fth[0]-Ftot[0], Ft1 = Fth[1]-Ftot[1], Ft2 = Fth[2]-Ftot[2];
-      std::fprintf(stderr, "  [ptc-deep] carve kdeep=%d T0=%.1f T1=%.1f T(kdeep)=%.1f anchor=%.1f  F0=%.2e F1=%.2e\n",
-                   kdeep, T_final[0], T_final[1], T_final[kdeep], T_final[kdeep+1],
-                   radiation_field.flux_total[0], radiation_field.flux_total[1]);
-      std::fprintf(stderr, "  [ptc-deep] dtau(0,1)=%.2e dtau(1,2)=%.2e  Fstar(thermal target) L0=%.2e L1=%.2e L2=%.2e  Keff=%.3e\n",
-                   deep_dtau[0], deep_dtau[1], Ft0, Ft1, Ft2, Keff);
-    }
-  }
 
-  // Shapiro filter on the committed radiative PROFILE: removes the flux-neutral Nyquist (2*dz) sawtooth
-  // that opacity-sampling noise excites through the radiative-equilibrium Jacobian's near-null grid mode.
-  // Applied each iteration; the solver re-establishes the real (long-wavelength) structure while the
-  // filter keeps suppressing the grid mode, so it does NOT bias the fixed point (the Nyquist is flux-
-  // neutral) the way a residual curvature penalty does (which fed the convective-mask runaway). alpha=1
-  // annihilates the Nyquist exactly; alpha~0.3-0.5 barely touches real inversions. Interior RADIATIVE
-  // levels only (both neighbours radiative, away from the RCB and surface). CLIMA_SHAPIRO=0 disables it.
-  {
-    // Shapiro default OFF for every flux-residual / ratio / ptc mode: although it damps the radiative
-    // sawtooth, it MUTATES the committed profile, and the next iteration's convective-mask detection reads
-    // that profile -> smoothing the lower-stratosphere levels shifts the RCB off its true radiative-
-    // equilibrium position (mask feedback -> wrong troposphere extent / surface T). The sawtooth is cured
-    // at the source by CLIMA_TRIDIAG (an approximate Jacobian that damps the Nyquist step) WITHOUT touching
-    // the profile or the mask. Re-enable per-run with CLIMA_SHAPIRO only for the pure-radiative stress test.
-    // CLIMA_HSTEP defaults the Shapiro filter OFF: the whole point is that the dominant heating step
-    // operator should retire the sawtooth on its own, so the filter must not mask the result.
-    const double alpha_s = std::getenv("CLIMA_SHAPIRO") ? std::atof(std::getenv("CLIMA_SHAPIRO")) : ((netflux || centered || localre || ratio || newtonlike || ptc || hstep) ? 0.0 : 1.0);
-    if (alpha_s > 0.0)
-    {
-      std::vector<double> Tf = T_final;
-      for (size_t i = 1; i+1 < n; ++i)
-      {
-        if (slaved[i] || slaved[i-1] || slaved[i+1]) continue;                                 // skip convective/RCB
-        if (zone_of_dof[i] >= 0 || zone_of_dof[i-1] >= 0 || zone_of_dof[i+1] >= 0) continue;    // skip zone DOFs
-        Tf[i] = std::max(1.0, T_final[i] + 0.25*alpha_s*(T_final[i-1] - 2.0*T_final[i] + T_final[i+1]));
-      }
-      T_final = Tf;
-    }
-  }
+  // NOTE: a post-hoc Shapiro filter on the committed profile used to live here. It is REMOVED, not
+  // merely defaulted off: it mutates the profile AFTER the solve, so the Newton never sees it and the
+  // two fight -- measured, it floors the residual at ~6e-4 and the run can never converge (the inner
+  // solve reaches 1e-13 and the filter hands the error straight back). The sawtooth is instead cured
+  // at its source by the collocated ratio residual, whose Nyquist eigenvalue is O(1) rather than ~0.
+  // If cosmetic smoothing of the FINAL output is ever wanted, do it outside the solver loop.
 
   std::vector<double> Ffin, NHfin;
   forward_eval_full_(T_final, /*recompute_opacity=*/true, /*compute_jacobian=*/false, Ffin, NHfin);
@@ -2075,7 +1239,7 @@ void ClimaRCECorrection::calcCorrection(
     double res;
     if (zi >= 0) { const Zone& z = zones[zi]; const double low = (z.lower==0)?0.0:Ffin[z.lower-1]; res = Ffin[z.upper]-low; }
     else if (i == 0) res = Ffin[0];
-    else res = (netflux || ptc) ? Ffin[i] : (Ffin[i] - Ffin[i-1]);   // ptc: actual net-flux imbalance (conservation)
+    else res = Ffin[i] - Ffin[i-1];   // ptc: actual net-flux imbalance (conservation)
     flux_resid = std::max(flux_resid, std::abs(res) / fnorm);
   }
   // the carved-out deep (incl. the surface endpoint when carved) is not in unk, but its flux conservation
