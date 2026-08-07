@@ -1,11 +1,13 @@
 clearvars;
 
+file_name = "output_gas1.nc";
+
 % Load the data
-T   = ncread('output_gas.nc', 'temperature');
-P   = ncread('output_gas.nc', 'pressure');
-conv = ncread('output_gas.nc', 'convective');
-flux_div = ncread('output_gas.nc', 'flux_divergence');
-flux_tot = ncread('output_gas.nc', 'flux_total');
+T   = ncread(file_name, 'temperature');
+P   = ncread(file_name, 'pressure');
+conv = ncread(file_name, 'convective');
+flux_div = ncread(file_name, 'flux_divergence');
+flux_tot = ncread(file_name, 'flux_total');
 
 % Split into radiative and convective
 rad  = conv == 0;
@@ -23,9 +25,9 @@ cnv  = conv == 1;
 %If you want connected line segments coloured by zone instead of dots, you can loop over contiguous regions:
 
 
-T    = ncread('output_gas.nc', 'temperature');
-P    = ncread('output_gas.nc', 'pressure');
-conv = ncread('output_gas.nc', 'convective');
+T    = ncread(file_name, 'temperature');
+P    = ncread(file_name, 'pressure');
+conv = ncread(file_name, 'convective');
 
 figure; hold on
 

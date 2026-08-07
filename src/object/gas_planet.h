@@ -15,10 +15,12 @@
 #include "../temperature/time_stepping_temperature.h"
 #include "../temperature/time_stepping_lre_temperature.h"
 #include "../temperature/linearised_temperature_correction.h"
+#include "../temperature/clima_rce_correction.h"
 #include "../chemistry/select_chemistry.h"
 #include "../convection/dry_adiabatic.h"
 #include "../convection/moist_adiabatic.h"
 #include "../stellar/stellar_spectrum.h"
+#include "../additional/quadrature.h"
 
 
 namespace ngam {
@@ -171,12 +173,57 @@ class GasPlanet : public GenericObject {
       // through the semi-infinite lower boundary. With target_flux > 0 the
       // temperature correction anchors the deep atmosphere to this flux,
       // exactly as for the brown dwarf.
+      // Flux scale for residual normalisation and the convergence metric. The natural target of the
+      // correction is F_net = F_int at every level, but for an irradiated planet F_int is usually
+      // TINY compared to the stellar flux the two streams actually carry (here F_int = sigma T_int^4
+      // ~ 5.7e3 vs mu*S ~ 1.2e8 erg/cm2/s): judging |F_net - F_int| relative to F_int alone demands
+      // a stream accuracy of tol * F_int / (mu*S) ~ 5e-10 -- unreachable for any sampled-opacity RT.
+      // The honest scale is the flux the atmosphere actually transports, mu*S + F_int (reduces to
+      // F_int for an isolated object, to mu*S for a strongly irradiated one). The CLIMA_RCE corrector
+      // already normalises internally by max(F_int, F_down(TOA)); this scale feeds the linearised
+      // (PTC) corrector and the driver's fallback display/convergence metric.
+      const double flux_scale =
+        aux::quadratureTrapezoidal(spectral_grid->wavenumber_list, stellar_flux) * zenith_angle
+        + target_flux;
+
       std::unique_ptr<TemperatureCorrection> temp_correction;
-      if (use_linearisation)
+      if (std::getenv("CLIMA_RCE"))
+      {
+        // Collocated ratio residual + full Uns\"old-Lucy (the terrestrial default), generalised to a
+        // nonzero internal flux: at RCE the NET total flux (thermal + stellar) equals F_int at every
+        // level, so the corrector's bottom/zone rows and the Lucy integral all target F_star =
+        // sigma T_int^4 exactly as for the brown dwarf; the absorbed stellar flux enters through the
+        // mean intensity in the ratio term. mask_band = 0 as for the brown dwarf: the self-luminous
+        // deep sits at Delta tau >> 1 per layer, where a one-level RCB placement error locks in a
+        // large-amplitude checkerboard (see the constructor note in clima_rce_correction.h).
+        temp_correction = std::make_unique<ClimaRCECorrection>(target_flux, convection.get(), 0);
+        temp_correction->setForwardEvalFull(
+          [this](const std::vector<double>& T, bool recompute_opacity, bool compute_jacobian,
+                 std::vector<double>& flux_out, std::vector<double>& net_heating_out)
+          {
+            atmosphere.temperature = T;
+            if (recompute_opacity)          // true residual: composition + structure + opacity
+            {
+              calcChemistry();
+              atmosphere.calcAtmosphereStructure(surface_gravity, bottom_radius, use_variable_gravity);
+              opacity.calculate();
+            }
+            RadiativeBoundaryConditions bc;
+            bc.incident_flux = stellar_flux;
+            bc.zenith_angle = zenith_angle;
+            bc.has_surface = false;         // semi-infinite bottom, irradiated top
+            radiation_field.compute_jacobian = compute_jacobian;
+            radiative_transfer->calculate(atmosphere, opacity, radiation_field, bc);
+            flux_out = radiation_field.flux_total;
+            net_heating_out = radiation_field.net_heating;
+          });
+      }
+      else if (use_linearisation)
         // full Newton step (relaxation = 1) on the flux-constancy residual; the
         // per-iteration cap below provides the safeguard far from equilibrium.
+        // flux_scale (mu*S + F_int) replaces the default F_int residual scale -- see above.
         temp_correction = std::make_unique<LinearisedTemperatureCorrection>(
-          target_flux, 1.0, 1.0, max_change_per_iteration, convection.get());
+          target_flux, 1.0, 1.0, max_change_per_iteration, convection.get(), flux_scale);
       else if (lre_fraction > 0)
         temp_correction = std::make_unique<TimeSteppingLRETemperature>(
           -1.0, iteration_gamma, target_flux, lre_fraction);
@@ -203,7 +250,7 @@ class GasPlanet : public GenericObject {
                 << "  " << std::setw(12) << "max|dT/T|"
                 << "  " << std::setw(9) << "max|dT|"
                 << "  " << std::setw(5) << "@ lv"
-                << "  " << std::setw(12) << "dF/F(int)"
+                << "  " << std::setw(12) << "dF/F(s+i)"
                 << "  " << std::setw(8) << "T_bot"
                 << "  " << std::setw(8) << "T_top"
                 << "  " << std::setw(6) << "N_conv"
@@ -239,8 +286,11 @@ class GasPlanet : public GenericObject {
         temp_correction->calcCorrection(
           surface_gravity, atmosphere, radiation_field, opacity);
 
-        // 8. Limit maximum temperature change per iteration
-        if (max_change_per_iteration > 0)
+        // 8. Limit maximum temperature change per iteration. Skipped when the corrector sets its
+        // own step (NLEQ-ERR / trust region): a post-hoc per-level clip breaks the adiabat slaving
+        // (a convective layer is clipped independently of its anchor) and moves the committed
+        // profile off the root the Newton just found, flooring the residual.
+        if (max_change_per_iteration > 0 && !temp_correction->managesOwnStepSize())
         {
           for (size_t i = 0; i < atmosphere.temperature.size(); ++i)
           {
@@ -252,14 +302,17 @@ class GasPlanet : public GenericObject {
           }
         }
 
-        // 9. Convective adjustment (the linearisation Newton handles convection internally,
-        // slaving convective layers to the adiabat, so the explicit adjustment is skipped there)
-        if (convection && !use_linearisation)
+        // 9. Convective adjustment (the linearisation and clima-RCE Newtons handle convection
+        // internally, slaving convective layers to the adiabat, so the explicit adjustment is
+        // skipped there -- it would overwrite both the committed profile and the corrector's
+        // convective-mask bookkeeping)
+        const bool newton_corrector = use_linearisation || std::getenv("CLIMA_RCE");
+        if (convection && !newton_corrector)
           convection->adjust(atmosphere);
 
         // 10. Ng acceleration (only for the fixed-point relaxation correctors;
-        // the full-linearisation Newton step converges on its own)
-        bool ng_applied = use_linearisation
+        // the Newton step converges on its own)
+        bool ng_applied = newton_corrector
           ? false : ng.accelerate(atmosphere.temperature, iter);
 
         // 11. Convergence check
@@ -291,8 +344,10 @@ class GasPlanet : public GenericObject {
         // (excludes convective + optically-thin-skin layers) when it provides one, else the
         // TOA flux error.
         const double lin_resid = temp_correction->lastConvergenceResidual();
+        // fallback metric (relaxation correctors): TOA net-flux error relative to the TRANSPORTED
+        // flux mu*S + F_int, not F_int alone (see the flux_scale note above).
         const double flux_error = (lin_resid >= 0.0)
-          ? lin_resid : (radiation_field.flux_total.back() - target_flux) / target_flux;
+          ? lin_resid : (radiation_field.flux_total.back() - target_flux) / flux_scale;
 
         const int n_conv = std::count(
           atmosphere.convective.begin(), atmosphere.convective.end(), 1);

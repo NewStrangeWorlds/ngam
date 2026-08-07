@@ -84,10 +84,17 @@ model = pyngam.GasPlanet(
 
 # --- Initialize ---
 
+# model.initialize(
+#     temperature_type="milne",
+#     temperature_config=[],
+#     temperature_parameters=[1e-2, 500.0],   # kappa_ross, T_eff (Milne init)
+#     init_chemistry=[("isoprofile", chem_species)],
+#     init_chemistry_parameters=mix_ratios)
+
 model.initialize(
-    temperature_type="milne",
+    temperature_type="const",
     temperature_config=[],
-    temperature_parameters=[1e-2, 500.0],   # kappa_ross, T_eff (Milne init)
+    temperature_parameters=[2000],   # kappa_ross, T_eff (Milne init)
     init_chemistry=[("isoprofile", chem_species)],
     init_chemistry_parameters=mix_ratios)
 

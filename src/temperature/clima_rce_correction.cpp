@@ -212,7 +212,7 @@ void ClimaRCECorrection::calcCorrection(
     // metric to 1.0 each step (the RCB toggle that blocks convergence). Extend through gaps <= mask_band
     // and fill solid up to the surface-connected top.
     {
-      const int gap_fill = std::getenv("CLIMA_MASKBAND") ? std::atoi(std::getenv("CLIMA_MASKBAND")) : 2;
+      const int gap_fill = std::getenv("CLIMA_MASKBAND") ? std::atoi(std::getenv("CLIMA_MASKBAND")) : mask_band_default;
       int top = -1, gap = 0;
       for (size_t i = 0; i < n; ++i)
       {
@@ -268,7 +268,7 @@ void ClimaRCECorrection::calcCorrection(
   // dead band: the true radiative-convective boundary sits between grid levels, so the discrete mask
   // would oscillate by +-1 layer forever (each move swinging the surface). Accept a small boundary
   // ambiguity: once the mask is within `mask_band` layers of the detected mask, stop moving it.
-  const int mask_band = std::getenv("CLIMA_MASKBAND") ? std::atoi(std::getenv("CLIMA_MASKBAND")) : 2;
+  const int mask_band = std::getenv("CLIMA_MASKBAND") ? std::atoi(std::getenv("CLIMA_MASKBAND")) : mask_band_default;
   int disagree = 0;
   if (have_prev) for (size_t i = 0; i < n; ++i) disagree += (prev_mask_[i] != desired[i]);
 
@@ -420,8 +420,13 @@ void ClimaRCECorrection::calcCorrection(
   // (F_net = const = 0  <=>  div F_net = 0) but the net-flux form is far better conditioned -> no sawtooth,
   // so the Shapiro filter is not needed (defaulted off below when this mode is on).
   constexpr bool netflux = false;
-  const double Fnorm = radiation_field.flux_down_total.empty()
-    ? 1.0 : std::max(1.0, std::abs(radiation_field.flux_down_total.back()));
+  // Flux scale for the flux-type rows. The incident (TOA downward) flux is the natural scale for an
+  // IRRADIATED object, but it is ~0 for a self-luminous one -- there the scale is the internal flux
+  // F_star = sigma T_int^4. Taking the max covers both and reduces to the old behaviour whenever an
+  // incident flux dominates. Without this the self-luminous flux rows are effectively unnormalised
+  // (Fnorm falls back to 1) and the residual is reported in raw erg/cm^2/s.
+  const double Fnorm = std::max({1.0, std::abs(target_flux),
+    radiation_field.flux_down_total.empty() ? 0.0 : std::abs(radiation_field.flux_down_total.back())});
 
   // CLIMA_CENTERED: use a SYMMETRIC (control-volume) divergence g_i = 0.5*(F[i+1]-F[i-1])/c_eff for the
   // radiative layers instead of the one-sided backward g_i = (F[i]-F[i-1])/c_eff. This is the proper
@@ -552,6 +557,43 @@ void ClimaRCECorrection::calcCorrection(
   const bool lucy = ratio && std::getenv("CLIMA_NO_LUCY") == nullptr;   // default ON with the ratio residual
   const double lucy_sign = std::getenv("CLIMA_LUCY_SIGN") ? std::atof(std::getenv("CLIMA_LUCY_SIGN")) : -1.0;
 
+  // CLIMA_THICK_SMOOTH: 4th-difference Nyquist penalty on the ratio rows of OPTICALLY-THICK radiative
+  // levels (per-layer Planck-mean dtau > 1). Self-luminous objects have a detached radiative band with
+  // dtau >> 1 per layer (measured 15-125 at P ~ 2-19 bar for the T_eff=1000 K brown dwarf at n=100),
+  // where BOTH terms of the collocated residual lose their Nyquist response: the ratio term goes blind
+  // (J -> B locally for ANY profile once the layer is thick -- H owns neither boundary) and the Lucy
+  // cumulative integral suppresses period-2 content by 1/k. The checkerboard is then a NULL direction
+  // of the residual: own_resid converges to 1e-6 with a +-1.8e-3 alternating flux error and a 39 K
+  // |d2T| still present, and WHICH member of the degenerate family is reached is path-dependent
+  // (fresh start vs restart land on different profiles). In the diffusion limit the true solution is
+  // smooth on the grid scale, so a Nyquist-selective penalty there encodes real physics: the 4th
+  // difference is ~0 for any smooth profile (unlike a 2nd difference it does not fight the real
+  // adiabat-like curvature) and O(16a) for a checkerboard of amplitude a. Gating on dtau > 1 keeps it
+  // OFF the photosphere and the optically-thin top, where the ratio term itself is well conditioned
+  // and the terrestrial no-penalty result must be preserved (this term is inactive for the
+  // terrestrial photosphere, whose layers sit at dtau <~ 1).
+  // IN the residual AND the Jacobian (not post-hoc), so the committed profile stays a root of its own
+  // system. Default ON in ratio mode; CLIMA_THICK_SMOOTH=0 disables, or sets the strength.
+  // DEFAULT OFF (opt-in experiment) -- measured on the T_eff=1000 K brown dwarf, n=100:
+  //  * lambda=0.3, unguarded stencil: destabilises the radiative-convective coupling (the penalty
+  //    leaks into the zone anchor through the junction stencils, the mask detection flips, N_conv
+  //    collapses 9 -> 1, no convergence).
+  //  * lambda=0.05 with the full-stencil free-radiative guard below: stable and converged, but NO
+  //    band improvement -- the guard excludes exactly the junction rows where the checkerboard
+  //    peaks -- and the HARD dtau>1 gate books a new 41 K |d2T| seam at the gate boundary
+  //    (P~0.07 bar). A future attempt needs a SMOOTH gate weight (e.g. dtau^2/(1+dtau^2)) and a
+  //    junction-safe stencil; until then the dtau<~1 resolution rule (tau-adaptive grid) is the
+  //    honest lever for the thick-band Nyquist degeneracy.
+  const double thick_smooth = std::getenv("CLIMA_THICK_SMOOTH")
+    ? std::atof(std::getenv("CLIMA_THICK_SMOOTH")) : 0.0;
+  // full stencil must be free radiative (not surface, not slaved, not a zone DOF)
+  auto thickSmoothOK = [&](size_t i) {
+    if (!(thick_smooth > 0.0 && i >= 2 && i+2 < n)) return false;
+    for (int dl = -2; dl <= 2; ++dl)
+    { const size_t l = i + dl; if (l == 0 || slaved[l] || zone_of_dof[l] >= 0) return false; }
+    return true;
+  };
+
   // CLIMA_TRIDIAG: restrict the assembled radiative-level Jacobian rows to TRIDIAGONAL form (drop the
   // off-band global radiative coupling). The dense flux/divergence operator carries the sawtooth as a
   // NEAR-NULL (Nyquist) eigenvector -- global +-delta cancellation makes the flux blind to a period-2 T
@@ -632,7 +674,7 @@ void ClimaRCECorrection::calcCorrection(
   // contrast eps. Grid refinement varies both at once, so only a direct dtau measurement separates them.
   constexpr bool dumptau = false;
   std::vector<double> nl_dtau(n, 1.0);
-  if ((newtonlike && !nl_netheat) || hstep || dumptau || lucy)   // CLIMA_HSTEP/LUCY need the per-layer dtau
+  if ((newtonlike && !nl_netheat) || hstep || dumptau || lucy || thick_smooth > 0.0)   // HSTEP/LUCY/THICK_SMOOTH need the per-layer dtau
   {
     const std::vector<double> nl_w = aux::trapezoidalWeights(ratio_wn);
     std::vector<double> kP(n, 0.0);
@@ -719,7 +761,11 @@ void ClimaRCECorrection::calcCorrection(
       if (zi >= 0)                                   // convective-zone DOF: net flux into the whole zone
       {
         const Zone& z = zones[zi];
-        const double f_lower = (z.lower == 0) ? 0.0 : F[z.lower-1];
+        // Flux entering the zone from below. At the DOMAIN BOTTOM this is the internal flux
+        // F_star = sigma T_int^4 (self-luminous); it is 0 for a terrestrial planet, so the
+        // terrestrial behaviour is unchanged. Without this the zone row would drive F_u -> 0
+        // instead of F_u -> F_star and the whole column would be pushed to the wrong level.
+        const double f_lower = (z.lower == 0) ? target_flux : F[z.lower-1];
         // NORMALISATION: this row is the whole zone's energy budget. Dividing by c_eff_zone (the entire
         // troposphere's heat capacity, ~1e10) makes a 0.2 W/m^2 imbalance look like ~1e-8 to the Newton,
         // so it stops there -- while conv_resid divides the SAME quantity by Fnorm and reports ~6e-4.
@@ -729,8 +775,8 @@ void ClimaRCECorrection::calcCorrection(
         const bool zone_fluxnorm = (netflux || ratio) && !std::getenv("CLIMA_ZONE_CEFF");
         g[r] = (F[z.upper] - f_lower) / (zone_fluxnorm ? Fnorm : ceff_zone[zi]);
       }
-      else if (i == 0)                               // surface DOF: F_net[0]=0 balance
-        g[r] = F[0] / ceff[0];
+      else if (i == 0)                               // bottom DOF: F_net[0] -> F_star (0 = terrestrial
+        g[r] = (F[0] - target_flux) / ceff[0];       // surface balance; sigma T_int^4 self-luminous)
       else                                           // radiative level
       {
         // RCB HANDOVER. The collocated (ratio) residual is purely LOCAL, so for the first radiative level
@@ -760,7 +806,14 @@ void ClimaRCECorrection::calcCorrection(
                                       if (lucy) {                       // full UL: level + gradient, in the residual
                                         const double Btot = 5.670374e-5*std::pow(std::max(T[i],1.0),4)/M_PI;
                                         glucy = lucy_sign * lucyB[i] / std::max(Btot, 1e-30); }
-                                      g[r] = ratio_xi*gre + gflux + glucy ; }
+                                      // optically-thick Nyquist penalty (see thick_smooth above): uses the
+                                      // BUILT profile T, so slaved stencil neighbours fold consistently
+                                      // through Cfac in the Jacobian.
+                                      double gsm = 0.0;
+                                      if (nl_dtau[i] > 1.0 && thickSmoothOK(i))
+                                        gsm = thick_smooth *
+                                          (T[i-2] - 4.0*T[i-1] + 6.0*T[i] - 4.0*T[i+1] + T[i+2]) / T[i];
+                                      g[r] = ratio_xi*gre + gflux + glucy + gsm; }
         else                          g[r] = (F[i] - F[i-1]) / ceff[i];             // one-sided backward (clima)
       }
     }
@@ -923,6 +976,14 @@ void ClimaRCECorrection::calcCorrection(
       if (ratio && zi < 0 && i != 0 && !rcb_handover_row)
       {
         row[i] -= ratio_xi * ratio_diag_corr;      // local Planck-cooling diagonal -xi*C_i/den_i
+        // optically-thick Nyquist penalty stencil (must match assembleG's gsm; the full-stencil
+        // free-radiative guard means no slaved/zone folding is involved). The d(1/T_i) term of the
+        // normalisation is O(s4/T^2), ~1e-6 of the stencil weights -- omitted.
+        if (nl_dtau[i] > 1.0 && thickSmoothOK(i))
+        {
+          const double w = thick_smooth / std::max(atmosphere.temperature[i], 1.0);
+          row[i-2] += w; row[i-1] -= 4.0*w; row[i] += 6.0*w; row[i+1] -= 4.0*w; row[i+2] += w;
+        }
         // fully transparent (den=0) AND no flux anchor (zeta~0, the thin top): the row is all-zero ->
         // give it a unit restoring diagonal so the LU stays nonsingular (g_i=0 there -> dx_i=0 anyway).
         if (ratio_inv == 0.0 && ratio_zeta[i] < 1e-12) { for (size_t l = 0; l < n; ++l) row[l] = 0.0; row[i] = -1.0; }
@@ -1063,7 +1124,16 @@ void ClimaRCECorrection::calcCorrection(
       if (!solveDenseLU(A, b, m)) break;        // singular (should not happen: J is diagonally dominant)
       const std::vector<double> dx = b;
       const double norm_dx = scaledNorm(dx, x);
-      if (norm_dx < xtol) break;                // converged in the Newton correction
+      if (norm_dx < xtol)                       // converged in the Newton correction
+      {
+        // COMMIT the final correction before declaring convergence (Deuflhard's termination:
+        // x* = x + dx). Breaking without it discards a step that annihilates the current residual
+        // (g + J dx = 0), which left own_resid floored at ~5e-5 with dT/T = 0 EXACTLY -- a stall on
+        // a stiff row (the Lucy TOA level term, amplified by 1/B(T_top)) whose tiny-in-x correction
+        // the loop computed and then threw away every outer iteration.
+        for (size_t r = 0; r < m; ++r) x[r] = std::max(1.0, x[r] + dx[r]);
+        break;
+      }
 
       // NLEQ-ERR damping: accept lambda when theta = ||dxbar||/||dx|| <= 1 - lambda/4, where the SIMPLIFIED
       // correction dxbar = -J^{-1} g(x + lambda dx) reuses the matrix J(x) but the TRUE residual at the trial.
@@ -1230,21 +1300,22 @@ void ClimaRCECorrection::calcCorrection(
   //      sitting near the flux threshold but still moving is not declared converged. Held at 1.0 while the
   //      convective mask is making a real (>band) move. --------------------------------------------------
   double flux_resid = 0.0;
-  const double fnorm = radiation_field.flux_down_total.empty()
-    ? 1.0 : std::max(1.0, std::abs(radiation_field.flux_down_total.back()));
+  const double fnorm = std::max({1.0, std::abs(target_flux),
+    radiation_field.flux_down_total.empty() ? 0.0 : std::abs(radiation_field.flux_down_total.back())});
   for (size_t r = 0; r < m; ++r)
   {
     const size_t i = unk[r];
     const int zi = zone_of_dof[i];
     double res;
-    if (zi >= 0) { const Zone& z = zones[zi]; const double low = (z.lower==0)?0.0:Ffin[z.lower-1]; res = Ffin[z.upper]-low; }
-    else if (i == 0) res = Ffin[0];
+    // same bottom-boundary convention as assembleG: at the domain bottom the inflow is F_star
+    if (zi >= 0) { const Zone& z = zones[zi]; const double low = (z.lower==0)?target_flux:Ffin[z.lower-1]; res = Ffin[z.upper]-low; }
+    else if (i == 0) res = Ffin[0] - target_flux;
     else res = Ffin[i] - Ffin[i-1];   // ptc: actual net-flux imbalance (conservation)
     flux_resid = std::max(flux_resid, std::abs(res) / fnorm);
   }
   // the carved-out deep (incl. the surface endpoint when carved) is not in unk, but its flux conservation
   // still gates convergence (creep-proof)
-  for (size_t i = 0; i < n; ++i) if (deep[i]) flux_resid = std::max(flux_resid, std::abs(Ffin[i]) / fnorm);
+  for (size_t i = 0; i < n; ++i) if (deep[i]) flux_resid = std::max(flux_resid, std::abs(Ffin[i]-target_flux) / fnorm);
 
   // ---- MODE-AWARE criterion. flux_resid above measures FLUX CONSERVATION, which is the residual the
   // flux/PTC modes actually drive -- but NOT the one a COLLOCATED mode drives. The ratio (local-RE) mode
@@ -1257,16 +1328,43 @@ void ClimaRCECorrection::calcCorrection(
   // error bar (the distance between the two roots), just not the convergence test for a collocated mode.
   double own_resid = flux_resid;
   const bool collocated = (ratio || localre || newtonlike);
+  size_t own_arg = 0;                     // level index of the dominant residual row (diagnostic)
   if (collocated)
   {
     std::vector<double> gfin;
     assembleG(Ffin, NHfin, T_final, gfin);
     own_resid = 0.0;
-    for (double e : gfin) own_resid = std::max(own_resid, std::abs(e));
+    for (size_t r = 0; r < gfin.size(); ++r)
+      if (std::abs(gfin[r]) > own_resid) { own_resid = std::abs(gfin[r]); own_arg = unk[r]; }
   }
   if (dbg)
-    std::fprintf(stderr, "  [converge] own_resid=%.3e  flux_resid=%.3e (error bar)  dT/T=%.3e  mode=%s\n",
-                 own_resid, flux_resid, inner_change, collocated ? "collocated" : "flux");
+    std::fprintf(stderr, "  [converge] own_resid=%.3e @lv%zu  flux_resid=%.3e (error bar)  dT/T=%.3e  mode=%s\n",
+                 own_resid, own_arg, flux_resid, inner_change, collocated ? "collocated" : "flux");
+  // CLIMA_ROWDUMP: one-shot per-level anatomy of the committed collocated residual -- per-layer
+  // Planck-mean dtau, the ratio term gre, the Lucy term glucy, and the flux error. Separates the
+  // optically-thick band (dtau >> 1, gre blind) from the photosphere.
+  if (collocated && std::getenv("CLIMA_ROWDUMP"))
+  {
+    static bool row_dumped = false;
+    if (!row_dumped)
+    {
+      row_dumped = true;
+      std::vector<double> lucyB; lucyVec(Ffin, lucyB);
+      std::fprintf(stderr, "  [rowdump] lv P[bar] T dtau gre glucy (F-F*)/F* type\n");
+      for (size_t i = 0; i < n; ++i)
+      {
+        double num, den, C; ratioSums(T_final, i, num, den, C);
+        const double gre = (den > 0.0) ? (num/den - 1.0) : 0.0;
+        const double Btot = 5.670374e-5*std::pow(std::max(T_final[i],1.0),4)/M_PI;
+        const double glucy = lucy_sign * lucyB[i] / std::max(Btot, 1e-30);
+        const char* type = slaved[i] ? "slaved" : (zone_of_dof[i] >= 0 ? "zone" :
+          (i == 0 ? "bottom" : ((slaved[i-1] || zone_of_dof[i-1] >= 0) ? "handover" : "ratio")));
+        std::fprintf(stderr, "  [rowdump] %zu %.4e %.2f %.4e %+.4e %+.4e %+.4e %s\n",
+          i, atmosphere.pressure[i], T_final[i], nl_dtau[i], gre, glucy,
+          (Ffin[i]-target_flux)/fnorm, type);
+      }
+    }
+  }
   last_residual_ = mask_big_change ? 1.0 : std::max(own_resid, inner_change);
 }
 

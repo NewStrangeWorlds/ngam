@@ -50,12 +50,20 @@ class Convection;
 // All RT re-evaluations go through the ForwardEvalFull callback the driver installs.
 class ClimaRCECorrection : public TemperatureCorrection{
   public:
+    // mask_band_: dead-band half-width (in levels) for the convective-boundary limiter. The default 2
+    // is the terrestrial choice, where the ratio residual is measurably insensitive to a +-1-level RCB
+    // placement (Delta tau <~ 1 through the photosphere). SELF-LUMINOUS objects must pass 0: their
+    // detached radiative band sits at Delta tau >> 1 per layer, where the collocated residual is
+    // Nyquist-degenerate and a one-level placement error locks in a large-amplitude checkerboard
+    // member of the root family (measured: flux error bar 3.6e-3 -> 1.1e-4 and band |d2T| 39 -> 13 K
+    // when the mask reaches the detected top). Env CLIMA_MASKBAND still overrides for experiments.
     ClimaRCECorrection(
       const double target_flux_,
       const Convection* convection_,
-      const double surface_gravity_unused_ = 0.0)
+      const int mask_band_ = 2)
       : target_flux(target_flux_)
-      , convection(convection_) {}
+      , convection(convection_)
+      , mask_band_default(mask_band_) {}
     virtual ~ClimaRCECorrection() {}
 
     // Uses DISORT's analytic Planck-only net-flux temperature Jacobian (= clima's frozen-opacity
@@ -74,6 +82,7 @@ class ClimaRCECorrection : public TemperatureCorrection{
   private:
     const double target_flux = 0.0;
     const Convection* convection = nullptr;
+    const int mask_band_default = 2;    // RCB dead-band half-width (see constructor note)
 
     ForwardEvalFull forward_eval_full_ = nullptr;
 

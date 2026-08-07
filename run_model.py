@@ -44,7 +44,7 @@ grid = pyngam.SpectralGrid(
 
 model = pyngam.BrownDwarf(
     spectral_grid=grid,
-    nb_grid_points=200,
+    nb_grid_points=100,
     atmos_boundary_pressures=[1e2, 1e-6],
     cross_section_file_path=opacity_data_path,
     opacity_species_symbol=species_symbols,
@@ -54,7 +54,7 @@ model = pyngam.BrownDwarf(
     rt_type="disort",
     rt_params=["4"],
     use_variable_gravity=False,
-    max_iterations=400,
+    max_iterations=100,
     convergence_threshold=1e-5,
     iteration_gamma=0.5,
     lre_fraction=0.5,

@@ -35,6 +35,7 @@
 #include "../temperature/time_stepping_temperature.h"
 #include "../temperature/time_stepping_lre_temperature.h"
 #include "../temperature/linearised_temperature_correction.h"
+#include "../temperature/clima_rce_correction.h"
 #include "../chemistry/select_chemistry.h"
 #include "../convection/dry_adiabatic.h"
 #include "../convection/moist_adiabatic.h"
@@ -174,7 +175,41 @@ class BrownDwarf : public GenericObject {
       // time-stepping correction (dynamic mode: dt <= 0)
       // optionally with opacity-weighted LRE correction
       std::unique_ptr<TemperatureCorrection> temp_correction;
-      if (use_linearisation)
+      if (std::getenv("CLIMA_RCE"))
+      {
+        // Collocated ratio residual + full Uns\"old-Lucy (the terrestrial default), applied to the
+        // self-luminous case. Motivation: the per-level net-flux residual of the linearised corrector
+        // has a near-null Nyquist eigenvalue (the net flux is an odd angular moment, so its Jacobian
+        // diagonal cancels), which leaves a grid-scale checkerboard in the CONVERGED ROOT that no step
+        // operator can remove -- measured here at ~10 K near the convective boundary (P ~ 2-20 bar),
+        // i.e. ~6e-3 relative. The ratio residual's Nyquist eigenvalue is O(1) instead, and the
+        // one-sided cumulative Lucy integral supplies level and gradient without re-exciting the mode.
+        // The self-luminous case is the CLASSICAL Uns\"old-Lucy setting: F_star = sigma T_int^4 is a
+        // known nonzero scalar (the corrector's bottom-boundary rows carry it) and there is no surface
+        // energy balance to reconcile.
+        // mask_band = 0: the self-luminous detached radiative band sits at Delta tau >> 1 per layer,
+        // where a one-level RCB placement error locks in a large-amplitude checkerboard (see the
+        // constructor note in clima_rce_correction.h). The terrestrial default dead band (2) left the
+        // mask one level short of the detected top and cost 30x in the flux error bar.
+        temp_correction = std::make_unique<ClimaRCECorrection>(target_flux, convection.get(), 0);
+        temp_correction->setForwardEvalFull(
+          [this](const std::vector<double>& T, bool recompute_opacity, bool compute_jacobian,
+                 std::vector<double>& flux_out, std::vector<double>& net_heating_out)
+          {
+            atmosphere.temperature = T;
+            if (recompute_opacity)          // true residual: composition + structure + opacity
+            {
+              calcChemistry();
+              atmosphere.calcAtmosphereStructure(surface_gravity, bottom_radius, use_variable_gravity);
+              opacity.calculate();
+            }
+            radiation_field.compute_jacobian = compute_jacobian;
+            radiative_transfer->calculate(atmosphere, opacity, radiation_field);
+            flux_out = radiation_field.flux_total;
+            net_heating_out = radiation_field.net_heating;
+          });
+      }
+      else if (use_linearisation)
         // full Newton step (relaxation = 1); the per-iteration cap is the safeguard.
         temp_correction = std::make_unique<LinearisedTemperatureCorrection>(
           target_flux, 1.0, 1.0, max_change_per_iteration, convection.get());
@@ -233,8 +268,12 @@ class BrownDwarf : public GenericObject {
         temp_correction->calcCorrection(
           surface_gravity, atmosphere, radiation_field, opacity);
 
-        // 6b. Limit maximum temperature change per iteration
-        if (max_change_per_iteration > 0)
+        // 6b. Limit maximum temperature change per iteration. Skipped when the corrector sets its own
+        // step (NLEQ-ERR / trust region): an independent per-level clip here is a POST-HOC profile
+        // modification the Newton never sees -- it breaks the adiabat slaving (a convective layer is
+        // clipped independently of its anchor level) and moves the committed profile off the root, so
+        // the residual floors (the measured terrestrial Shapiro-filter failure mode).
+        if (max_change_per_iteration > 0 && !temp_correction->managesOwnStepSize())
         {
           for (size_t i = 0; i < atmosphere.temperature.size(); ++i)
           {
@@ -246,13 +285,16 @@ class BrownDwarf : public GenericObject {
           }
         }
 
-        // 7. Convective adjustment (the linearisation Newton handles convection internally,
-        // slaving convective layers to the adiabat, so the explicit adjustment is skipped there)
-        if (convection && !use_linearisation)
+        // 7. Convective adjustment (the linearisation and clima-RCE Newtons handle convection
+        // internally, slaving convective layers to the adiabat, so the explicit adjustment is
+        // skipped there -- it would overwrite both the committed profile and the corrector's
+        // convective-mask bookkeeping)
+        const bool newton_corrector = use_linearisation || std::getenv("CLIMA_RCE");
+        if (convection && !newton_corrector)
           convection->adjust(atmosphere);
 
         // 8. Ng acceleration (relaxation correctors only; the Newton step self-converges)
-        bool ng_applied = use_linearisation
+        bool ng_applied = newton_corrector
           ? false : ng.accelerate(atmosphere.temperature, iter);
 
         // 9. Convergence check: max |dT/T| and max |dT|
