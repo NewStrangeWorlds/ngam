@@ -47,7 +47,8 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
     double lre_fraction,
     double min_convection_pressure,
     double max_change_per_iteration,
-    bool use_linearisation)
+    std::string temperature_correction,
+    std::vector<std::string> temperature_correction_parameters)
 {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     for (auto& [type, params] : chemistry_configs)
@@ -81,7 +82,8 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
         lre_fraction,
         min_convection_pressure,
         max_change_per_iteration,
-        use_linearisation);
+        temperature_correction,
+        temperature_correction_parameters);
 }
 
 
@@ -113,7 +115,8 @@ static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
     double lre_fraction,
     double min_convection_pressure,
     double max_change_per_iteration,
-    bool use_linearisation)
+    std::string temperature_correction,
+    std::vector<std::string> temperature_correction_parameters)
 {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     for (auto& [type, params] : chemistry_configs)
@@ -176,7 +179,8 @@ static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
         lre_fraction,
         min_convection_pressure,
         max_change_per_iteration,
-        use_linearisation);
+        temperature_correction,
+        temperature_correction_parameters);
 }
 
 
@@ -209,7 +213,8 @@ static std::unique_ptr<GasPlanet> make_gas_planet(
     double lre_fraction,
     double min_convection_pressure,
     double max_change_per_iteration,
-    bool use_linearisation)
+    std::string temperature_correction,
+    std::vector<std::string> temperature_correction_parameters)
 {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     for (auto& [type, params] : chemistry_configs)
@@ -272,7 +277,8 @@ static std::unique_ptr<GasPlanet> make_gas_planet(
         lre_fraction,
         min_convection_pressure,
         max_change_per_iteration,
-        use_linearisation);
+        temperature_correction,
+        temperature_correction_parameters);
 }
 
 
@@ -406,7 +412,8 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("lre_fraction") = 0.0,
             py::arg("min_convection_pressure") = 1e-4,
             py::arg("max_change_per_iteration") = 0.1,
-            py::arg("use_linearisation") = false,
+            py::arg("temperature_correction") = "ratio_ul",
+            py::arg("temperature_correction_parameters") = std::vector<std::string>{},
             py::keep_alive<1, 2>())
         .def("initialize", &BrownDwarf::initialize,
             py::arg("temperature_type"),
@@ -454,7 +461,8 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("lre_fraction") = 0.0,
             py::arg("min_convection_pressure") = 1e-4,
             py::arg("max_change_per_iteration") = 0.1,
-            py::arg("use_linearisation") = false,
+            py::arg("temperature_correction") = "ratio_ul",
+            py::arg("temperature_correction_parameters") = std::vector<std::string>{},
             py::keep_alive<1, 2>())
         .def("initialize", &TerrestrialPlanet::initialize,
             py::arg("temperature_type"),
@@ -508,7 +516,8 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("lre_fraction") = 0.0,
             py::arg("min_convection_pressure") = 1e-4,
             py::arg("max_change_per_iteration") = 0.1,
-            py::arg("use_linearisation") = false,
+            py::arg("temperature_correction") = "ratio_ul",
+            py::arg("temperature_correction_parameters") = std::vector<std::string>{},
             py::keep_alive<1, 2>())
         .def("initialize", &GasPlanet::initialize,
             py::arg("temperature_type"),

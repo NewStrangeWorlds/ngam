@@ -1,23 +1,3 @@
-/*
-* This file is part of the BeAR code (https://github.com/newstrangeworlds/BeAR).
-* Copyright (C) 2024 Daniel Kitzmann
-*
-* BeAR is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* BeAR is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
-*
-* You find a copy of the GNU General Public License in the main
-* BeAR directory under <LICENSE>. If not, see
-* <http://www.gnu.org/licenses/>.
-*/
-
-
 #ifndef _temperature_correction_h
 #define _temperature_correction_h
 
@@ -64,6 +44,19 @@ class TemperatureCorrection{
 
     // True if the corrector sets its own step size (so the loop must skip its outer per-iteration cap).
     virtual bool managesOwnStepSize() const { return false; }
+
+    // True for correctors that slave convective zones INTERNALLY and self-converge. The driver must
+    // then NOT run its own convective adjustment or Ng acceleration: both edit the committed profile
+    // after the solve, which the corrector never sees -- the two fight and the residual floors.
+    // Distinct from managesOwnStepSize(), which is only about per-iteration step limiting.
+    virtual bool handlesConvectionInternally() const { return false; }
+
+    // True for correctors that determine the SURFACE temperature as part of their own solve (a
+    // surface-anchored Newton: T_surf is the bottom level, set by its F_net[0] row). The driver then
+    // only mirrors it, and must not run the explicit surface model or the post-solve Shapiro filter.
+    // Deliberately separate from handlesConvectionInternally(): the two happen to coincide today, but
+    // they are different properties and conflating such predicates has already caused one regression.
+    virtual bool solvesSurfaceTemperature() const { return false; }
 
     // Whether this corrector needs the radiative-transfer temperature Jacobians
     // (dJ/dT, dF/dT). When true the iteration loop must set

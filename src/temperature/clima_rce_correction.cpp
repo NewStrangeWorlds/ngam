@@ -1,23 +1,3 @@
-/*
-* This file is part of the BeAR code (https://github.com/newstrangeworlds/BeAR).
-* Copyright (C) 2024 Daniel Kitzmann
-*
-* BeAR is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* BeAR is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
-*
-* You find a copy of the GNU General Public License in the main
-* BeAR directory under <LICENSE>. If not, see
-* <http://www.gnu.org/licenses/>.
-*/
-
-
 #include "clima_rce_correction.h"
 
 #include <vector>
@@ -183,8 +163,7 @@ void ClimaRCECorrection::calcCorrection(
     // RCB too HIGH (the steep near-tropopause radiative profile reads super-adiabatic) -> the convective
     // adiabat overshoots cold and KINKS the tropopause. With it the RCB lands correctly; the only side
     // effect (a converged on-adiabat zone occasionally reading as NO convection -- a marginal flip) is
-    // guarded just below.
-    if (!std::getenv("CLIMA_MASKSMOOTH") || std::atof(std::getenv("CLIMA_MASKSMOOTH")) != 0.0)
+    // guarded just below. (Always on: the smoothing is what makes the RCB land correctly.)
     {
       std::vector<double>& Tp = probe.temperature;
       const std::vector<double> Tin = Tp;
@@ -212,7 +191,7 @@ void ClimaRCECorrection::calcCorrection(
     // metric to 1.0 each step (the RCB toggle that blocks convergence). Extend through gaps <= mask_band
     // and fill solid up to the surface-connected top.
     {
-      const int gap_fill = std::getenv("CLIMA_MASKBAND") ? std::atoi(std::getenv("CLIMA_MASKBAND")) : mask_band_default;
+      const int gap_fill = mask_band_default;
       int top = -1, gap = 0;
       for (size_t i = 0; i < n; ++i)
       {
@@ -240,11 +219,11 @@ void ClimaRCECorrection::calcCorrection(
           const double nabla_ad = 0.5*(
             convection->convectiveGradient(atmosphere.number_densities[des_top],   atmosphere.temperature[des_top],   atmosphere.pressure[des_top]) +
             convection->convectiveGradient(atmosphere.number_densities[des_top+1], atmosphere.temperature[des_top+1], atmosphere.pressure[des_top+1]));
-          const double off_frac = std::getenv("CLIMA_RCB_OFFFRAC") ? std::atof(std::getenv("CLIMA_RCB_OFFFRAC")) : 0.5;
+          constexpr double off_frac = 0.5;   // clima Mode-3 anti-overshoot trigger
           if (nabla < -off_frac*nabla_ad)             // sharp cold inversion above the top -> overshoot
           {
             rcb_cap_  = des_top - 1;                   // retreat one level
-            rcb_lock_ = std::getenv("CLIMA_RCB_LOCK") ? std::atoi(std::getenv("CLIMA_RCB_LOCK")) : 5;
+            rcb_lock_ = 5;                   // lockout iterations after a cold-inversion shrink
           }
         }
       }
@@ -261,14 +240,14 @@ void ClimaRCECorrection::calcCorrection(
   // the current mask (clima solves hybrj to convergence BEFORE moving the mask). Otherwise hold the
   // mask frozen and keep iterating -- this stops the boundary from jittering on a half-converged
   // profile, which is what feeds the checkerboard sawtooth just above the RCB.
-  const double settle_tol = std::getenv("CLIMA_SETTLE") ? std::atof(std::getenv("CLIMA_SETTLE")) : 2e-3;
+  constexpr double settle_tol = 2e-3;  // max|dT/T| below which the mask may be re-detected
   const bool have_prev = (prev_mask_.size() == n);
   const bool settled = !have_prev || (last_inner_change_ < settle_tol);
 
   // dead band: the true radiative-convective boundary sits between grid levels, so the discrete mask
   // would oscillate by +-1 layer forever (each move swinging the surface). Accept a small boundary
   // ambiguity: once the mask is within `mask_band` layers of the detected mask, stop moving it.
-  const int mask_band = std::getenv("CLIMA_MASKBAND") ? std::atoi(std::getenv("CLIMA_MASKBAND")) : mask_band_default;
+  const int mask_band = mask_band_default;   // set per object via the config/selector
   int disagree = 0;
   if (have_prev) for (size_t i = 0; i < n; ++i) disagree += (prev_mask_[i] != desired[i]);
 
@@ -483,8 +462,6 @@ void ClimaRCECorrection::calcCorrection(
   // convention selects only which omega is used (a smooth O(1) prefactor), NOT the collocation.
   // So net_heating[k] describes LEVEL k. Shifting it moves the Planck-cooling term off the
   // diagonal and destroys dominance; -1 was tried and is worse. Kept only as a diagnostic knob.
-  const int  hstep_off  = std::getenv("CLIMA_HSTEP_OFF") ? std::atoi(std::getenv("CLIMA_HSTEP_OFF")) : 0;
-  const double hstep_sign = std::getenv("CLIMA_HSTEP_SIGN") ? std::atof(std::getenv("CLIMA_HSTEP_SIGN")) : -1.0;
   constexpr bool hstep_surf = false;
   constexpr bool hstep_zone = false;
 
@@ -539,8 +516,7 @@ void ClimaRCECorrection::calcCorrection(
   // (Sec.4's local-RE-vs-conservation gap, reduced but not removed by the Lucy term).
   // Selecting any other experimental mode (PTC/netflux/centered/localre/newtonlike) opts out automatically.
   const bool ratio_other_mode = (netflux || centered || localre || newtonlike || ptc);
-  const bool ratio = (std::getenv("CLIMA_RATIO_RE") != nullptr)
-                  || (!ratio_other_mode && std::getenv("CLIMA_FLUX_RESID") == nullptr);
+  const bool ratio = use_ratio && !ratio_other_mode;
 
   // CLIMA_RATIO_LUCY: the FULL Unsoeld-Lucy correction, in the residual. What the corrector previously
   // called "UL" is only Lucy's rank-one uniform LEVEL shift, applied POST-solve -- which moves the profile
@@ -554,8 +530,10 @@ void ClimaRCECorrection::calcCorrection(
   // INTEGRAL, which has only the constant null mode and SUPPRESSES Nyquist content (~1/k), where the
   // per-level flux difference AMPLIFIES it (~k) -- the same "integrate, don't difference" move that fixed
   // the optically-thick deep. Parameter-free: the coefficients are the Eddington closure, not tuning.
-  const bool lucy = ratio && std::getenv("CLIMA_NO_LUCY") == nullptr;   // default ON with the ratio residual
-  const double lucy_sign = std::getenv("CLIMA_LUCY_SIGN") ? std::atof(std::getenv("CLIMA_LUCY_SIGN")) : -1.0;
+  const bool lucy = ratio;        // the full Uns\"old-Lucy correction is intrinsic to the ratio scheme
+  // Sign of the Uns"old-Lucy correction: the correction is MINUS the cumulative integral (too much
+  // flux => too steep a gradient). Measured: +1 diverges (the convective zone runs away). Not a knob.
+  constexpr double lucy_sign = -1.0;
 
   // CLIMA_THICK_SMOOTH: 4th-difference Nyquist penalty on the ratio rows of OPTICALLY-THICK radiative
   // levels (per-layer Planck-mean dtau > 1). Self-luminous objects have a detached radiative band with
@@ -584,8 +562,7 @@ void ClimaRCECorrection::calcCorrection(
   //    (P~0.07 bar). A future attempt needs a SMOOTH gate weight (e.g. dtau^2/(1+dtau^2)) and a
   //    junction-safe stencil; until then the dtau<~1 resolution rule (tau-adaptive grid) is the
   //    honest lever for the thick-band Nyquist degeneracy.
-  const double thick_smooth = std::getenv("CLIMA_THICK_SMOOTH")
-    ? std::atof(std::getenv("CLIMA_THICK_SMOOTH")) : 0.0;
+  constexpr double thick_smooth = 0.0;  // 4th-diff penalty on thick rows: tried, rejected (see doc)
   // full stencil must be free radiative (not surface, not slaved, not a zone DOF)
   auto thickSmoothOK = [&](size_t i) {
     if (!(thick_smooth > 0.0 && i >= 2 && i+2 < n)) return false;
@@ -652,8 +629,8 @@ void ClimaRCECorrection::calcCorrection(
   // default flux anchor = low-rank DEFLATION (driver); CLIMA_RATIO_PERLEVEL selects the old per-level
   // zeta-blend (kept for comparison; it fights the diagonal because the flux constraint is nonlocal).
   constexpr bool ratio_perlevel = false;
-  const double ratio_xi = std::getenv("CLIMA_RATIO_XI") ? std::atof(std::getenv("CLIMA_RATIO_XI")) : 1.0;
-  const double ratio_tauscale = std::getenv("CLIMA_RATIO_ZETA_TAUSCALE") ? std::atof(std::getenv("CLIMA_RATIO_ZETA_TAUSCALE")) : 1.0;
+  constexpr double ratio_xi = 1.0;      // weight of the local-RE term; 1 = the scheme as documented
+  constexpr double ratio_tauscale = 1.0;
   constexpr bool ratio_fluxdense = false;
   std::vector<double> ratio_zeta(n, 0.0), ratio_tau(n, 0.0);
 
@@ -772,7 +749,7 @@ void ClimaRCECorrection::calcCorrection(
         // That mismatch, not a solver failure, is the residual floor. Use the flux scale (as `netflux`
         // mode already does) so the solver drives what the metric measures. CLIMA_ZONE_CEFF restores the
         // old weighting.
-        const bool zone_fluxnorm = (netflux || ratio) && !std::getenv("CLIMA_ZONE_CEFF");
+        const bool zone_fluxnorm = (netflux || ratio);
         g[r] = (F[z.upper] - f_lower) / (zone_fluxnorm ? Fnorm : ceff_zone[zi]);
       }
       else if (i == 0)                               // bottom DOF: F_net[0] -> F_star (0 = terrestrial
@@ -788,7 +765,7 @@ void ClimaRCECorrection::calcCorrection(
         // the boundary. So give just that one level the flux-difference form: continuity is restored while
         // local RE (and its smoothness) is kept everywhere else. Disable with CLIMA_RATIO_NORCBFLUX.
         const bool above_rcb = (i > 0) && (slaved[i-1] || zone_of_dof[i-1] >= 0);
-        if (ratio && above_rcb && !std::getenv("CLIMA_RATIO_NORCBFLUX"))
+        if (ratio && above_rcb)
                                       g[r] = (F[i] - F[i-1]) / ceff[i];   // flux continuity across the RCB
         else if (ratio)             { double num, den, C; ratioSums(T, i, num, den, C);
                                       const double gre = (den > 0.0) ? (num / den - 1.0) : 0.0;
@@ -934,7 +911,7 @@ void ClimaRCECorrection::calcCorrection(
           row[l] = s / ceff_zone[zi];
         }
         else if (zi >= 0) { const Zone& z = zones[zi]; const double low = (z.lower==0)?0.0:NFJ[z.lower-1][l];
-                            const bool zfn = (netflux || ratio) && !std::getenv("CLIMA_ZONE_CEFF");
+                            const bool zfn = (netflux || ratio);
                             row[l] = (NFJ[z.upper][l]-low)/(zfn ? Fnorm : ceff_zone[zi]); }  // must match assembleG
         else if (i == 0 && hstep_surf) row[l] = 0.0;   // Sec.7.4: closed-form surface row, filled below
         else if (i == 0) row[l] = NFJ[0][l]/ceff[0];
@@ -942,7 +919,7 @@ void ClimaRCECorrection::calcCorrection(
         // (calibrated, diagonally-dominant); CLIMA_RATIO_FLUXDENSE falls back to the raw dense NFJ.
         // RCB handover row: must MATCH the residual chosen in assembleG for this level, else the Newton
         // stalls (an inconsistent Jacobian is rejected by the trust region -- measured elsewhere).
-        else if (ratio && i > 0 && (slaved[i-1] || zone_of_dof[i-1] >= 0) && !std::getenv("CLIMA_RATIO_NORCBFLUX"))
+        else if (ratio && i > 0 && (slaved[i-1] || zone_of_dof[i-1] >= 0))
                         row[l] = (NFJ[i][l] - NFJ[i-1][l]) / ceff[i];
         else if (ratio) row[l] = ratio_xi * (MK[i][l] * ratio_inv)
                                                               + (lucy ? lucy_sign * lucyJ[i][l] / std::max(5.670374e-5*std::pow(std::max(atmosphere.temperature[i],1.0),4)/M_PI, 1e-30) : 0.0)
@@ -972,7 +949,7 @@ void ClimaRCECorrection::calcCorrection(
       // (skip for the RCB-handover level: its row is the flux difference, not the ratio form, so the
       //  ratio Planck-cooling diagonal must not be added on top of it)
       const bool rcb_handover_row = ratio && i > 0 && (slaved[i-1] || zone_of_dof[i-1] >= 0)
-                                    && !std::getenv("CLIMA_RATIO_NORCBFLUX");
+                                    ;
       if (ratio && zi < 0 && i != 0 && !rcb_handover_row)
       {
         row[i] -= ratio_xi * ratio_diag_corr;      // local Planck-cooling diagonal -xi*C_i/den_i
@@ -1235,7 +1212,7 @@ void ClimaRCECorrection::calcCorrection(
   // CLIMA_RATIO_NOUL to move the error to the TOA instead. A weak un-differenced flux term in the residual
   // (CLIMA_LREANCHOR) does NOT help here -- its Jacobian row is the deficient dense NFJ and it makes the
   // TOA imbalance worse (0.198 -> 0.236 -> 0.543 W/m^2 at eps = 0, 0.02, 0.10).
-  if (ratio && !lucy && !std::getenv("CLIMA_RATIO_NOUL") && !radiation_field.net_flux_jacobian.empty())
+  if (ratio && !lucy && !radiation_field.net_flux_jacobian.empty())
   {
     std::vector<double> gtmp;
     evalG(x, /*want_jac=*/true, gtmp);            // refresh the radiation field + Jacobian AT x

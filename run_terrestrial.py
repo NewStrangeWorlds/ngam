@@ -68,7 +68,7 @@ mix_ratios = [0.02, 0.98]  # H2, O2, H2O, N2
 
 model = pyngam.TerrestrialPlanet(
     spectral_grid=grid,
-    nb_grid_points=200,
+    nb_grid_points=100,
     atmos_boundary_pressures=[1, 1e-5],
     cross_section_file_path=opacity_data_path,
     opacity_species_symbol=species_symbols,
@@ -89,14 +89,14 @@ model = pyngam.TerrestrialPlanet(
     surface_params=["data/Earth/earth_spectral_surface_reflection.dat"],  #albedo file
     chemistry_parameters=mix_ratios,
     max_iterations=50,
+    temperature_correction="flux_divergence",
     convergence_threshold=1e-5,
     iteration_gamma=0.2,
     lre_fraction=0.1,
     use_convective_adjustment=True,
     convection_type="dry",
     ng_interval=0,
-    max_change_per_iteration=0.1,
-    use_linearisation=True)
+    max_change_per_iteration=0.1)
 
 
 # model = pyngam.TerrestrialPlanet(
@@ -126,7 +126,7 @@ model = pyngam.TerrestrialPlanet(
 #     convection_type="dry",
 #     ng_interval=0,
 #     max_change_per_iteration=0.1,
-#     use_linearisation=True)
+#)
 
 # model = pyngam.TerrestrialPlanet(
 #     spectral_grid=grid,

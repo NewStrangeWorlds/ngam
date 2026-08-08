@@ -1,23 +1,3 @@
-/*
-* This file is part of the BeAR code (https://github.com/newstrangeworlds/BeAR).
-* Copyright (C) 2024 Daniel Kitzmann
-*
-* BeAR is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* BeAR is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
-*
-* You find a copy of the GNU General Public License in the main
-* BeAR directory under <LICENSE>. If not, see
-* <http://www.gnu.org/licenses/>.
-*/
-
-
 #ifndef _linearised_temperature_correction_h
 #define _linearised_temperature_correction_h
 
@@ -62,6 +42,8 @@ class LinearisedTemperatureCorrection : public TemperatureCorrection{
     // trust/NLEQ mode controls its own step size internally, so the loop must NOT apply its outer
     // per-iteration temperature cap (it would break the adiabat slaving). The PTC path still wants it.
     bool managesOwnStepSize() const override { return trust_active_; }
+    bool handlesConvectionInternally() const override { return true; }
+    bool solvesSurfaceTemperature() const override { return surface_anchored; }
     // self-luminous: the radiative flux-conservation error. Surface-anchored (terrestrial): the
     // troposphere can never reach radiative flux balance (it carries a finite radiative imbalance
     // by construction), so converge instead on the temperature change once the zone has settled.

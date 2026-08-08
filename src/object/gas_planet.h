@@ -16,6 +16,7 @@
 #include "../temperature/time_stepping_lre_temperature.h"
 #include "../temperature/linearised_temperature_correction.h"
 #include "../temperature/clima_rce_correction.h"
+#include "../temperature/select_temperature_correction.h"
 #include "../chemistry/select_chemistry.h"
 #include "../convection/dry_adiabatic.h"
 #include "../convection/moist_adiabatic.h"
@@ -65,7 +66,8 @@ class GasPlanet : public GenericObject {
       double lre_fraction_ = 0.0,
       double min_convection_pressure_ = 1e-4,
       double max_change_per_iteration_ = 0.1,
-      bool use_linearisation_ = false)
+      std::string temperature_correction_ = "ratio_ul",
+      std::vector<std::string> temperature_correction_parameters_ = {})
       : GenericObject(
           spectral_grid,
           nb_grid_points,
@@ -90,7 +92,10 @@ class GasPlanet : public GenericObject {
         ng_interval(ng_interval_),
         lre_fraction(lre_fraction_),
         max_change_per_iteration(max_change_per_iteration_),
-        use_linearisation(use_linearisation_)
+
+        temperature_correction(temperature_correction_),
+
+        temperature_correction_parameters(temperature_correction_parameters_)
     {
       // precompute stellar flux per wavenumber
       stellar_flux = stellar_spectrum->calcFlux(spectral_grid->wavenumber_list);
@@ -186,9 +191,23 @@ class GasPlanet : public GenericObject {
         aux::quadratureTrapezoidal(spectral_grid->wavenumber_list, stellar_flux) * zenith_angle
         + target_flux;
 
-      std::unique_ptr<TemperatureCorrection> temp_correction;
-      if (std::getenv("CLIMA_RCE"))
-      {
+      // ---- temperature-correction scheme, selected by config string (see
+      //      select_temperature_correction.h and doc/temperature_correction_schemes.tex).
+      TemperatureCorrectionSetup tc_setup;
+      tc_setup.target_flux              = target_flux;
+      tc_setup.convection               = convection.get();
+      tc_setup.max_change_per_iteration = max_change_per_iteration;
+      tc_setup.iteration_gamma          = iteration_gamma;
+      tc_setup.lre_fraction             = lre_fraction;
+      tc_setup.flux_scale               = flux_scale;
+      // mask_band = 0: this object's radiative band runs at Delta tau >> 1, where the collocated
+      // residual is Nyquist-degenerate and a one-level RCB placement error locks in a checkerboard.
+      tc_setup.mask_band                = 0;
+
+      std::unique_ptr<TemperatureCorrection> temp_correction =
+        selectTemperatureCorrection(temperature_correction, temperature_correction_parameters, tc_setup);
+
+      // installed unconditionally; correctors that do not need it inherit a no-op.
         // Collocated ratio residual + full Uns\"old-Lucy (the terrestrial default), generalised to a
         // nonzero internal flux: at RCE the NET total flux (thermal + stellar) equals F_int at every
         // level, so the corrector's bottom/zone rows and the Lucy integral all target F_star =
@@ -196,7 +215,6 @@ class GasPlanet : public GenericObject {
         // mean intensity in the ratio term. mask_band = 0 as for the brown dwarf: the self-luminous
         // deep sits at Delta tau >> 1 per layer, where a one-level RCB placement error locks in a
         // large-amplitude checkerboard (see the constructor note in clima_rce_correction.h).
-        temp_correction = std::make_unique<ClimaRCECorrection>(target_flux, convection.get(), 0);
         temp_correction->setForwardEvalFull(
           [this](const std::vector<double>& T, bool recompute_opacity, bool compute_jacobian,
                  std::vector<double>& flux_out, std::vector<double>& net_heating_out)
@@ -217,21 +235,7 @@ class GasPlanet : public GenericObject {
             flux_out = radiation_field.flux_total;
             net_heating_out = radiation_field.net_heating;
           });
-      }
-      else if (use_linearisation)
-        // full Newton step (relaxation = 1) on the flux-constancy residual; the
-        // per-iteration cap below provides the safeguard far from equilibrium.
-        // flux_scale (mu*S + F_int) replaces the default F_int residual scale -- see above.
-        temp_correction = std::make_unique<LinearisedTemperatureCorrection>(
-          target_flux, 1.0, 1.0, max_change_per_iteration, convection.get(), flux_scale);
-      else if (lre_fraction > 0)
-        temp_correction = std::make_unique<TimeSteppingLRETemperature>(
-          -1.0, iteration_gamma, target_flux, lre_fraction);
-      else
-        temp_correction = std::make_unique<TimeSteppingTemperature>(
-          -1.0, iteration_gamma, target_flux);
 
-      // the full-linearisation corrector needs the analytic dJ/dT, dF/dT from DISORT
       radiation_field.compute_jacobian = temp_correction->requiresRadiationJacobian();
 
       NgAccelerator ng(ng_interval);
@@ -306,7 +310,7 @@ class GasPlanet : public GenericObject {
         // internally, slaving convective layers to the adiabat, so the explicit adjustment is
         // skipped there -- it would overwrite both the committed profile and the corrector's
         // convective-mask bookkeeping)
-        const bool newton_corrector = use_linearisation || std::getenv("CLIMA_RCE");
+        const bool newton_corrector = temp_correction->handlesConvectionInternally();
         if (convection && !newton_corrector)
           convection->adjust(atmosphere);
 
@@ -399,7 +403,8 @@ class GasPlanet : public GenericObject {
     size_t ng_interval;
     double lre_fraction;
     double max_change_per_iteration;
-    bool use_linearisation;
+    std::string temperature_correction;
+    std::vector<std::string> temperature_correction_parameters;
 
     void calcChemistry()
     {

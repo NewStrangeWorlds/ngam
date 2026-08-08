@@ -31,7 +31,7 @@ model_config = dict(
     surface_gravity=10**4.5,
     metallicity=1.0,
     c_to_o_ratio=0.5,
-    bottom_radius=7.1492e9,
+    bottom_radius=7.1492e9
 )
 
 
@@ -56,13 +56,13 @@ model = pyngam.BrownDwarf(
     use_variable_gravity=False,
     max_iterations=100,
     convergence_threshold=1e-5,
+    temperature_correction="ptc",
     iteration_gamma=0.5,
     lre_fraction=0.5,
     ng_interval=0,
     use_convective_adjustment=True,
     convection_type="dry",
     max_change_per_iteration=0.1,
-    use_linearisation=True,
     **model_config)
 
 

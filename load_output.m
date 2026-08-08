@@ -1,6 +1,6 @@
 clearvars;
 
-file_name = "output1.nc";
+file_name = "output.nc";
 
 % Load the data
 T   = ncread(file_name, 'temperature');

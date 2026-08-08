@@ -1,23 +1,3 @@
-/*
-* This file is part of the BeAR code (https://github.com/newstrangeworlds/BeAR).
-* Copyright (C) 2024 Daniel Kitzmann
-*
-* BeAR is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* BeAR is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
-*
-* You find a copy of the GNU General Public License in the main
-* BeAR directory under <LICENSE>. If not, see
-* <http://www.gnu.org/licenses/>.
-*/
-
-
 #ifndef _clima_rce_correction_h
 #define _clima_rce_correction_h
 
@@ -57,19 +37,26 @@ class ClimaRCECorrection : public TemperatureCorrection{
     // Nyquist-degenerate and a one-level placement error locks in a large-amplitude checkerboard
     // member of the root family (measured: flux error bar 3.6e-3 -> 1.1e-4 and band |d2T| 39 -> 13 K
     // when the mask reaches the detected top). Env CLIMA_MASKBAND still overrides for experiments.
+    // use_ratio_: true  -> collocated ratio residual + full Uns\"old-Lucy (the recommended scheme)
+    //             false -> heat-capacity-weighted flux-divergence residual (exact per-level flux
+    //                      conservation, at the cost of a grid-scale checkerboard in the root)
     ClimaRCECorrection(
       const double target_flux_,
       const Convection* convection_,
-      const int mask_band_ = 2)
+      const int mask_band_ = 2,
+      const bool use_ratio_ = true)
       : target_flux(target_flux_)
       , convection(convection_)
-      , mask_band_default(mask_band_) {}
+      , mask_band_default(mask_band_)
+      , use_ratio(use_ratio_) {}
     virtual ~ClimaRCECorrection() {}
 
     // Uses DISORT's analytic Planck-only net-flux temperature Jacobian (= clima's frozen-opacity
     // Jacobian, in one RT solve instead of m finite differences), so the driver must compute it.
     bool requiresRadiationJacobian() const override { return true; }
     bool managesOwnStepSize() const override { return true; }              // trust region damps itself
+    bool handlesConvectionInternally() const override { return true; }
+    bool solvesSurfaceTemperature() const override { return true; }
     void setForwardEvalFull(ForwardEvalFull f) override { forward_eval_full_ = std::move(f); }
     double lastConvergenceResidual() const override { return last_residual_; }
 
@@ -83,6 +70,7 @@ class ClimaRCECorrection : public TemperatureCorrection{
     const double target_flux = 0.0;
     const Convection* convection = nullptr;
     const int mask_band_default = 2;    // RCB dead-band half-width (see constructor note)
+    const bool use_ratio = true;        // residual family (see constructor note)
 
     ForwardEvalFull forward_eval_full_ = nullptr;
 

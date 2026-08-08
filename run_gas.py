@@ -70,14 +70,14 @@ model = pyngam.GasPlanet(
     chemistry_parameters=[1.0, 0.55],  # equilibrium chemistry: [metallicity, C/O]
     bottom_radius=7.0e9,           # cm (~ 1 R_Jup), for the deep atmosphere
     use_variable_gravity=False,
-    max_iterations=2000,
+    max_iterations=100,
+    temperature_correction="ptc",
     convergence_threshold=1e-5,
     iteration_gamma=0.2,
     lre_fraction=0.5,
     use_convective_adjustment=True,
     convection_type="dry",
     ng_interval=0,
-    use_linearisation = True,
     min_convection_pressure=1e-4,
     max_change_per_iteration=0.1)
 

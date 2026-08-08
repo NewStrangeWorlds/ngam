@@ -5,6 +5,7 @@ ngam
 build/*
 CMakeFiles/*
 .vscode/
+__pycache__/*
 
 prototyping/*
 
