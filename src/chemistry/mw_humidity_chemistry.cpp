@@ -18,7 +18,14 @@ bool ManabeWetherlandChemistry::calcChemicalComposition(
   std::vector<std::vector<double>>& number_densities,
   std::vector<double>& mean_molecular_weight)
 {
-  const double rh0 = parameters.empty() ? rh_surface : parameters[0];
+  // The surface relative humidity is a CONFIGURATION constant, taken from this module's own
+  // parameter list (chemistry=[("manabe_wetherald", ["0.77"])]) and fixed at construction. It is
+  // deliberately NOT read from the generic runtime `parameters` vector: that vector carries the
+  // background mixing ratios shared by all chemistry modules, so reading parameters[0] here
+  // silently reinterpreted the first mixing ratio as the humidity (e.g. chemistry_parameters =
+  // [0.02, 0.98] for N2/CO2 gave RH = 2% instead of 77%, a 38x drier atmosphere).
+  (void) parameters;
+  const double rh0 = rh_surface;
   const double p_s = pressure.front();  // surface pressure (bottom of atmosphere, index 0)
 
   // Build the H2O profile from the surface (index 0) upward, enforcing a COLD TRAP: the H2O volume

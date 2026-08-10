@@ -79,6 +79,10 @@ class ClimaRCECorrection : public TemperatureCorrection{
     double last_inner_change_ = 1e300;  // max|dT/T| the last inner solve applied (settle gate for the mask)
     int rcb_cap_ = -1;                  // anti-overshoot cap on the convective top (clima Mode-3; -1 = none)
     int rcb_lock_ = 0;                  // lockout countdown after a cold-inversion shrink (prevents ABAB toggle)
+    int rcb_grow_floor_ = -1;           // floor on the convective top after a raw-link promotion (-1 = none)
+    int rcb_grow_lock_ = 0;             // lockout countdown after a promotion (holds the level against demotion)
+    int rcb_last_promoted_ = -1;        // topmost level the raw-link growth check promoted (persists)
+    int rcb_no_promote_ = -1;           // grow/retract cycle breaker: this level may not be promoted again
 
     // CLIMA_PTC unified mode: pseudo-transient continuation state, persisting across calcCorrection
     // calls (one PTC step per call; the driver's outer loop grows dt). Global multiplier on top of

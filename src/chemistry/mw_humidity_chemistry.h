@@ -20,7 +20,10 @@ class ManabeWetherlandChemistry : public Chemistry {
     ManabeWetherlandChemistry(double rh_surface_ = 0.77)
       : rh_surface(rh_surface_)
     {
-      nb_parameters = 1;
+      // Consumes NO entries of the generic chemistry_parameters vector: the surface relative
+      // humidity is configured through this module's own parameter list, not at runtime. Keeping
+      // this at 0 also leaves the per-module slicing offsets of the other modules untouched.
+      nb_parameters = 0;
     }
     virtual ~ManabeWetherlandChemistry() {}
 

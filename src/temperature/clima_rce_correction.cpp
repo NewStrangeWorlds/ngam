@@ -150,6 +150,13 @@ void ClimaRCECorrection::calcCorrection(
       convection->convectiveGradient(atmosphere.number_densities[j], atmosphere.temperature[j], atmosphere.pressure[j]));
   };
 
+  // SETTLE GATE (used by the boundary logic below and the mask update further down): only move the
+  // convective boundary once the inner Newton has SETTLED the profile at the current mask (clima
+  // solves hybrj to convergence BEFORE moving the mask).
+  constexpr double settle_tol = 2e-3;  // max|dT/T| below which the mask may be re-detected
+  const bool have_prev = (prev_mask_.size() == n);
+  const bool settled = !have_prev || (last_inner_change_ < settle_tol);
+
   // ---- convective mask (multi-zone). Detect the "desired" mask on a SMOOTHED probe copy, so a
   // transient checkerboard sawtooth near the RCB cannot masquerade as super-adiabatic and grow the
   // convective zone up into the (stably stratified) stratosphere -- a feedback that otherwise
@@ -201,6 +208,97 @@ void ClimaRCECorrection::calcCorrection(
       for (int i = 0; i <= top; ++i) desired[i] = 1;     // solid surface-connected zone [0, top]
     }
 
+    // TOP OWNERSHIP (picaso): the probe may neither SHRINK nor EXTEND the deep zone's top -- that
+    // boundary is owned exclusively by the raw-link controller below (growth check + anti-overshoot,
+    // both acting only near convergence). Both probe failure modes are measured:
+    //  * shrink votes: a slaved level sits exactly ON the adiabat, so the smoothed copy reads the
+    //    converged zone as (sub-)neutral and flaps (Manabe-Wetherald run: desired_top 37 -> 27..29 ->
+    //    37 every settle, disagree spiking past the dead band, the limiter shaving one level off the
+    //    top per flap -- with re-promotion a permanent ABAB that blocks convergence). picaso's
+    //    boundary is grow-only for exactly this reason (growup only, climate.py:1634).
+    //  * extension votes: mid-run transients read super-adiabatic on the smoothed copy one level past
+    //    the true boundary; the limiter added the level and the ratchet then kept it (moist N=200 run:
+    //    top crept one past the vetted boundary and converged with |d2T| 5.75 vs 2.94, an inversion
+    //    dip above the forced-cold top).
+    // So: clamp the surface-connected desired run to exactly [0, prev_top]. The growth check re-adds
+    // levels after verifying the raw link. Detached zones above a gap are untouched (nucleation stays
+    // with the probe).
+    if (have_prev && prev_mask_[0])
+    {
+      int prev_top = -1;
+      for (int i = static_cast<int>(n)-1; i >= 0; --i) if (prev_mask_[i]) { prev_top = i; break; }
+      for (int i = 0; i <= prev_top; ++i) desired[i] = 1;
+      for (int i = prev_top+1; i < static_cast<int>(n) && desired[i]; ++i) desired[i] = 0;
+    }
+
+    // RAW-BOUNDARY-LINK GROWTH CHECK (picaso find_strat / clima Mode-3 hard invariant): the mask can
+    // lock BELOW the true boundary with a cold spike at the first radiative level -- the smoothed
+    // probe smears the spike into an apparent stable inversion (so `desired` never reaches it), and
+    // even when the probe DOES vote one level up, a 1-level disagreement sits inside the dead band
+    // and is swallowed (both measured on the moist terrestrial runs; the spike is a converged fixed
+    // point). picaso is immune because its growth test reads ONLY the single UNSMOOTHED link just
+    // above the CURRENT boundary (dtdp >= subad*grad_ad, climate.py:2649) and moves the boundary
+    // directly. Port that here: test the raw link above the current MASK top (not the probe's vote)
+    // against the adiabat and promote the level if it is clearly super-adiabatic. Successive links
+    // are tested with the ADIABAT-CONTINUED top temperature (what the level will be once slaved),
+    // not the corrupted raw value, so a promoted spike cannot poison the next link's test. At most
+    // 2 promotions per settle (clima's boundary-shift limiter); gated on `settled` so a
+    // half-converged radiative wish cannot grow the zone; skipped while the anti-overshoot lockout
+    // holds (the two must not fight). The promotion bypasses the dead band via rcb_grow_floor_.
+    // NEAR-CONVERGENCE GATE for the boundary controller (growth check below + anti-overshoot): move
+    // the top only between (almost) fully CONVERGED solves -- picaso re-runs profile() to convergence
+    // after every single-level move, clima solves hybrj to convergence before updating the mask. The
+    // looser settle gate (dT/T < 2e-3) is NOT enough: mid-run settles still carry transiently
+    // super-adiabatic links above the top, the growth check promoted them, and the ratchet then kept
+    // them -- the moist N=200 run over-grew one level and converged with a worse profile (|d2T| 5.75
+    // vs 2.94) than the trap it was fixing. The gate must sit well above the driver's convergence
+    // threshold (1e-5) so the controller always vets the state before the driver can declare
+    // convergence; a mask move resets the residual, so vetting happens at least once per fixed point.
+    // 1e-3 balances safety and cost: the measured transient over-vote states sit at own_resid >~ 1e-2
+    // (still blocked), while a 1e-4 gate made each promotion wait for a full polish (the
+    // Manabe-Wetherald run needed ~50 iterations per boundary move and hit the iteration cap).
+    const bool near_conv = last_residual_ >= 0.0 && last_residual_ < 1e-3;
+    if (std::getenv("CLIMA_DBG"))
+      std::fprintf(stderr, "  [grow?] near_conv=%d (resid=%.2e) have_prev=%d rcb_lock=%d rcb_grow_lock=%d\n",
+                   (int)near_conv, last_residual_, (int)have_prev, rcb_lock_, rcb_grow_lock_);
+    if (near_conv && have_prev && rcb_lock_ == 0)
+    {
+      int cur_top = -1;
+      for (int i = static_cast<int>(n)-1; i >= 0; --i) if (prev_mask_[i]) { cur_top = i; break; }
+      if (cur_top >= 0)
+      {
+        constexpr double grow_margin = 0.02;   // require 2% super-adiabaticity (picaso's nucleation threshold)
+        constexpr int    max_grow    = 2;
+        double T_top = atmosphere.temperature[cur_top];
+        int grown = 0;
+        for (int g = 0; g < max_grow && cur_top+1 < static_cast<int>(n); ++g)
+        {
+          if (cur_top+1 == rcb_no_promote_) break;   // grow/retract cycle breaker (see anti-overshoot)
+          const double dlnP = std::log(atmosphere.pressure[cur_top]/atmosphere.pressure[cur_top+1]);
+          if (dlnP <= 0.0) break;
+          const double nabla = std::log(T_top/atmosphere.temperature[cur_top+1]) / dlnP;
+          const double nabla_ad = nablaAd(cur_top, cur_top+1);
+          if (std::getenv("CLIMA_DBG"))
+            std::fprintf(stderr, "  [grow?] link L%d->L%d nabla=%.3f nabla_ad=%.3f -> %s\n",
+                         cur_top, cur_top+1, nabla, nabla_ad,
+                         (nabla_ad > 0.0 && nabla > (1.0 + grow_margin)*nabla_ad) ? "PROMOTE" : "stop");
+          if (!(nabla_ad > 0.0 && nabla > (1.0 + grow_margin)*nabla_ad)) break;
+          // continue the adiabat onto the promoted level for the next link's test
+          T_top *= std::pow(atmosphere.pressure[cur_top+1]/atmosphere.pressure[cur_top], nabla_ad);
+          ++cur_top;
+          desired[cur_top] = 1;
+          ++grown;
+        }
+        if (grown > 0)
+        {
+          rcb_grow_floor_ = cur_top;   // bypass the dead band: the promotion must reach the mask
+          rcb_grow_lock_  = 5;         // hold against demotion while the Newton re-converges
+          rcb_last_promoted_ = cur_top;
+          rcb_cap_ = -1; rcb_lock_ = 0;
+        }
+      }
+    }
+
     // ANTI-OVERSHOOT (clima Mode-3): the convective top is snapped to a grid level, so the slaved adiabat
     // can land one level too HIGH -- forcing the top onto the cold adiabat below the radiative profile that
     // would sit there, a sharp cold-inversion KINK at the tropopause (max-curv blew up to ~14 K at L16).
@@ -208,22 +306,64 @@ void ClimaRCECorrection::calcCorrection(
     // (dlnT/dlnP << 0, well beyond a gentle stratospheric warming), the adiabat has overshot -> SHRINK the
     // top by one level. A LOCKOUT (rcb_lock_) then caps the top there for a few iterations so the probe
     // cannot immediately re-grow it (the ABAB toggle clima's lockout counter prevents).
+    // NEAR-CONVERGENCE ONLY (clima solve-then-update): the trigger reads the profile only between
+    // (almost) converged solves, like the raw-link growth check -- same near_conv gate. Firing on
+    // transients is destructive now that the top ratchet holds probe-driven re-growth off: the first
+    // Newton mega-steps (dT/T ~ 0.5) read as cold inversions, the trigger marched the top down 4
+    // levels in 4 iterations, the perpetually re-armed lockout kept the growth check disabled, and
+    // the misplaced mask converged with a 155 K hole at the first radiative level (measured on the
+    // Manabe-Wetherald run).
     {
       int des_top = -1; for (int i = static_cast<int>(n)-1; i >= 0; --i) if (desired[i]) { des_top = i; break; }
-      if (des_top >= 1 && des_top+1 < static_cast<int>(n))
+      if (near_conv && des_top >= 1 && des_top+1 < static_cast<int>(n) && rcb_grow_lock_ == 0)
       {
         const double dlnP = std::log(atmosphere.pressure[des_top]/atmosphere.pressure[des_top+1]);
         if (dlnP > 0.0)
         {
-          const double nabla = std::log(atmosphere.temperature[des_top]/atmosphere.temperature[des_top+1])/dlnP;
+          // SPIKE-PROOF: evaluate the inversion with the ADIABAT-CONTINUED top temperature (what the
+          // top will be once slaved), not the current raw value. The continuation must be anchored at
+          // the last TRUSTED level -- the CURRENT MASK top, whose T is slaved/converged -- and walked
+          // up through every level to des_top: anchoring just one level down is not enough, because
+          // when the probe votes the top ABOVE the corrupted level (des_top = spike+1), des_top-1 IS
+          // the spike, the test reads a huge false cold inversion, and the lockout re-arms every call
+          // -- a permanent standoff that also gates the raw-link growth check off (measured on the
+          // Manabe-Wetherald run: rcb_lock frozen at 4 for 50 iterations). For an already-slaved
+          // des_top the walk is empty and the raw value is used, as before.
+          int t_anchor = des_top;
+          if (have_prev)
+          {
+            int prev_top = -1;
+            for (int i = static_cast<int>(n)-1; i >= 0; --i) if (prev_mask_[i]) { prev_top = i; break; }
+            if (prev_top >= 0 && prev_top < des_top) t_anchor = prev_top;
+          }
+          double T_top = atmosphere.temperature[t_anchor];
+          for (int mlev = t_anchor+1; mlev <= des_top; ++mlev)
+            T_top *= std::pow(atmosphere.pressure[mlev]/atmosphere.pressure[mlev-1],
+                              nablaAd(mlev-1, mlev));
+          const double nabla = std::log(T_top/atmosphere.temperature[des_top+1])/dlnP;
           const double nabla_ad = 0.5*(
             convection->convectiveGradient(atmosphere.number_densities[des_top],   atmosphere.temperature[des_top],   atmosphere.pressure[des_top]) +
             convection->convectiveGradient(atmosphere.number_densities[des_top+1], atmosphere.temperature[des_top+1], atmosphere.pressure[des_top+1]));
-          constexpr double off_frac = 0.5;   // clima Mode-3 anti-overshoot trigger
-          if (nabla < -off_frac*nabla_ad)             // sharp cold inversion above the top -> overshoot
+          // Trigger threshold: with mask moves now confined to near-converged states (and the probe
+          // barred from the top), this is the ONLY mechanism that can shave an over-extended top --
+          // in particular the INITIAL mask, which over-reaches because the adiabat-to-isothermal init
+          // profile reads super-adiabatic one or two levels past the true boundary (measured: the
+          // moist runs kept a converged top one level high, an inversion dip of -0.06..-0.19*nabla_ad
+          // above it, and |d2T| twice the vetted placement). So the threshold must catch mild
+          // inversions: 0.2*nabla_ad. The grow (+2%) and retract (-20%) tests read the SAME link with
+          // the SAME values at a converged state, so at most one can fire; an ABAB cycle is possible
+          // only when no rest state exists between two levels (converged-after-grow inverts < -20%
+          // AND converged-after-retract exceeds +102%), which rcb_no_promote_ breaks: a level whose
+          // promotion the retract undid is not promoted again -- the retracted (old-quality) state
+          // then stands, picaso-style preferences inverted because retract only fires on measured
+          // inversion, not on marginality.
+          constexpr double off_frac = 0.2;   // clima Mode-3 anti-overshoot trigger
+          if (nabla < -off_frac*nabla_ad)             // cold inversion above the top -> overshoot
           {
             rcb_cap_  = des_top - 1;                   // retreat one level
             rcb_lock_ = 5;                   // lockout iterations after a cold-inversion shrink
+            if (des_top == rcb_last_promoted_)         // undoing our own promotion -> cycle breaker
+              rcb_no_promote_ = des_top;
           }
         }
       }
@@ -236,13 +376,9 @@ void ClimaRCECorrection::calcCorrection(
     }
   }
 
-  // SETTLE GATE: only move the convective boundary once the inner Newton has SETTLED the profile at
-  // the current mask (clima solves hybrj to convergence BEFORE moving the mask). Otherwise hold the
-  // mask frozen and keep iterating -- this stops the boundary from jittering on a half-converged
-  // profile, which is what feeds the checkerboard sawtooth just above the RCB.
-  constexpr double settle_tol = 2e-3;  // max|dT/T| below which the mask may be re-detected
-  const bool have_prev = (prev_mask_.size() == n);
-  const bool settled = !have_prev || (last_inner_change_ < settle_tol);
+  // (settle gate: `settled` computed above the detection block. Holding the mask frozen while the
+  // inner Newton works stops the boundary from jittering on a half-converged profile, which is what
+  // feeds the checkerboard sawtooth just above the RCB.)
 
   // dead band: the true radiative-convective boundary sits between grid levels, so the discrete mask
   // would oscillate by +-1 layer forever (each move swinging the surface). Accept a small boundary
@@ -290,6 +426,16 @@ void ClimaRCECorrection::calcCorrection(
   // lockout is active, force the convective top down to rcb_cap_.
   if (rcb_lock_ > 0 && rcb_cap_ >= 0)
     for (size_t i = rcb_cap_+1; i < n; ++i) mask[i] = 0;
+  // RAW-LINK PROMOTION ENFORCEMENT: like the shrink above, a promotion is a deliberate correction that
+  // must bypass the dead band (a 1-2 level `desired` change never exceeds mask_band, so the limiter
+  // alone would swallow it -- the promoted level has to reach the mask directly). Fill from the floor
+  // down to the existing zone top (exactly the promoted levels), and hold for the lockout duration.
+  if (rcb_grow_lock_ > 0 && rcb_grow_floor_ >= 0)
+  {
+    for (int i = std::min(rcb_grow_floor_, static_cast<int>(n)-1); i >= 0 && !mask[i]; --i) mask[i] = 1;
+    --rcb_grow_lock_;
+  }
+  else { rcb_grow_floor_ = -1; }
   // force the surface into its troposphere (essential, not subject to the dead band): a convective
   // first layer means the surface is that zone's anchor, or surface and troposphere decouple.
   if (n > 1 && mask[1]) mask[0] = 1;
@@ -763,8 +909,15 @@ void ClimaRCECorrection::calcCorrection(
         // leftover flux divergence on the junction level (which is exactly what floors conv_resid). The
         // differenced-flux residual gets this coupling for free, because its stencil (F[i]-F[i-1]) SPANS
         // the boundary. So give just that one level the flux-difference form: continuity is restored while
-        // local RE (and its smoothness) is kept everywhere else. Disable with CLIMA_RATIO_NORCBFLUX.
-        const bool above_rcb = (i > 0) && (slaved[i-1] || zone_of_dof[i-1] >= 0);
+        // local RE (and its smoothness) is kept everywhere else.
+        //
+        // CLIMA_NORCBFLUX=1: DIAGNOSTIC -- drop the handover and use the plain ratio row at RCB+1.
+        // The handover is a FLUX-DIVERGENCE row (a difference of two net-flux Jacobian rows) embedded
+        // in an otherwise ratio system, so it inherits exactly the diagonal that collapses as
+        // 1/(2*dtau) and vanishes as kappa->0. At RCB+1 in a dry, optically thin stratosphere that
+        // single row is near-singular and stops pinning T at that level.
+        static const bool no_rcb_flux = std::getenv("CLIMA_NORCBFLUX") != nullptr;
+        const bool above_rcb = (i > 0) && (slaved[i-1] || zone_of_dof[i-1] >= 0) && !no_rcb_flux;
         if (ratio && above_rcb)
                                       g[r] = (F[i] - F[i-1]) / ceff[i];   // flux continuity across the RCB
         else if (ratio)             { double num, den, C; ratioSums(T, i, num, den, C);
@@ -919,7 +1072,8 @@ void ClimaRCECorrection::calcCorrection(
         // (calibrated, diagonally-dominant); CLIMA_RATIO_FLUXDENSE falls back to the raw dense NFJ.
         // RCB handover row: must MATCH the residual chosen in assembleG for this level, else the Newton
         // stalls (an inconsistent Jacobian is rejected by the trust region -- measured elsewhere).
-        else if (ratio && i > 0 && (slaved[i-1] || zone_of_dof[i-1] >= 0))
+        else if (ratio && i > 0 && (slaved[i-1] || zone_of_dof[i-1] >= 0)
+                 && std::getenv("CLIMA_NORCBFLUX") == nullptr)
                         row[l] = (NFJ[i][l] - NFJ[i-1][l]) / ceff[i];
         else if (ratio) row[l] = ratio_xi * (MK[i][l] * ratio_inv)
                                                               + (lucy ? lucy_sign * lucyJ[i][l] / std::max(5.670374e-5*std::pow(std::max(atmosphere.temperature[i],1.0),4)/M_PI, 1e-30) : 0.0)
@@ -949,7 +1103,7 @@ void ClimaRCECorrection::calcCorrection(
       // (skip for the RCB-handover level: its row is the flux difference, not the ratio form, so the
       //  ratio Planck-cooling diagonal must not be added on top of it)
       const bool rcb_handover_row = ratio && i > 0 && (slaved[i-1] || zone_of_dof[i-1] >= 0)
-                                    ;
+                                    && std::getenv("CLIMA_NORCBFLUX") == nullptr;
       if (ratio && zi < 0 && i != 0 && !rcb_handover_row)
       {
         row[i] -= ratio_xi * ratio_diag_corr;      // local Planck-cooling diagonal -xi*C_i/den_i
