@@ -8,6 +8,7 @@
 
 #include "temperature_correction.h"
 #include "clima_rce_correction.h"
+#include "../convection/convection.h"
 #include "linearised_temperature_correction.h"
 #include "time_stepping_temperature.h"
 #include "time_stepping_lre_temperature.h"
@@ -94,6 +95,18 @@ inline std::unique_ptr<TemperatureCorrection> selectTemperatureCorrection(
       std::distance(temperature_correction_modules::description_short.begin(), it_short));
 
   (void) parameters;   // reserved for scheme-specific arguments
+
+  // Flux-law convection (mlt/mlt_moist, the default) is consumed inside the ratio_ul corrector;
+  // every other scheme relies on the hard adjustment (applied by the driver or by internal
+  // slaving), which a flux-law Convection deliberately does NOT perform. flux_divergence was
+  // tried and measured NOT to converge with all levels free (its zone rows/slaving are
+  // load-bearing -- see the note in clima_rce_correction.cpp); the relaxation schemes would
+  // silently run without convection. Fail loudly instead.
+  if (setup.convection != nullptr && setup.convection->providesFlux()
+      && module_id != temperature_correction_modules::ratio_ul)
+    throw InvalidInput(std::string("forward_model.config"),
+      "convection_type mlt/mlt_moist requires temperature_correction ratio_ul; "
+      "use convection_type dry/moist with the other schemes\n");
 
   if (module_id == temperature_correction_modules::ratio_ul)
     return std::make_unique<ClimaRCECorrection>(

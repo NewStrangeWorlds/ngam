@@ -84,6 +84,13 @@ class ClimaRCECorrection : public TemperatureCorrection{
     int rcb_last_promoted_ = -1;        // topmost level the raw-link growth check promoted (persists)
     int rcb_no_promote_ = -1;           // grow/retract cycle breaker: this level may not be promoted again
 
+    // MLT easy-start homotopy (AGNI): the convective-flux prefactor is ramped 3e-4 -> 1, doubling
+    // once the current stage has settled -- the unscaled flux at the initial profile is O(10^3) x
+    // the stellar flux (x ~ 0.1 super-moist-adiabatic on every link), which the damped Newton
+    // cannot step through (measured: lambda -> 1e-4, then a 1e66 blow-up).
+    double mlt_sf_ = -1.0;              // current flux scale factor (<0 = uninitialised)
+    double mlt_prev_resid_ = -1.0;      // previous call's RAW residual (ramp gate; last_residual_ is floored while ramping)
+
     // CLIMA_PTC unified mode: pseudo-transient continuation state, persisting across calcCorrection
     // calls (one PTC step per call; the driver's outer loop grows dt). Global multiplier on top of
     // the per-level dt_i ~ radiative time; ramped by Deuflhard's ZIB-02-14 second-order rule.

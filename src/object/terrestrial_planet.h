@@ -11,6 +11,7 @@
 #include "generic_object.h"
 #include "../additional/physical_const.h"
 #include "../additional/ng_accelerator.h"
+#include "../additional/thermodynamic_data.h"
 #include "../temperature/select_temperature_profile.h"
 #include "../temperature/time_stepping_temperature.h"
 #include "../temperature/time_stepping_lre_temperature.h"
@@ -20,6 +21,7 @@
 #include "../chemistry/select_chemistry.h"
 #include "../convection/dry_adiabatic.h"
 #include "../convection/moist_adiabatic.h"
+#include "../convection/mixing_length.h"
 #include "../stellar/stellar_spectrum.h"
 #include "../surface/generic_surface.h"
 
@@ -48,13 +50,14 @@ class TerrestrialPlanet : public GenericObject {
       double convergence_threshold_ = 1e-4,
       double iteration_gamma_ = 0.5,
       bool use_convective_adjustment_ = true,
-      std::string convection_type_ = "dry",
+      std::string convection_type_ = "mlt",
       size_t ng_interval_ = 10,
       double lre_fraction_ = 0.0,
       double min_convection_pressure_ = 1e-3,
       double max_change_per_iteration_ = 0.1,
       std::string temperature_correction_ = "ratio_ul",
-      std::vector<std::string> temperature_correction_parameters_ = {})
+      std::vector<std::string> temperature_correction_parameters_ = {},
+      std::vector<std::string> convection_parameters_ = {})
       : GenericObject(
           spectral_grid,
           nb_grid_points,
@@ -84,7 +87,17 @@ class TerrestrialPlanet : public GenericObject {
 
       if (use_convective_adjustment_)
       {
-        if (convection_type_ == "moist")
+        if (convection_type_ == "mlt" || convection_type_ == "mlt_moist")
+        {
+          // smooth mixing-length convection (doc/mlt_convection_design.md); requires ratio_ul.
+          // convection_parameters[0] = mixing-length alpha (default 1; the converged T(P)
+          // is insensitive to it -- see the alpha regression test in the design note).
+          const double alpha =
+            convection_parameters_.empty() ? 1.0 : std::stod(convection_parameters_[0]);
+          convection = std::make_unique<MixingLengthConvection>(
+            convection_type_ == "mlt_moist", alpha, min_convection_pressure_);
+        }
+        else if (convection_type_ == "moist")
           convection = std::make_unique<MoistAdiabaticAdjustment>(10, min_convection_pressure_);
         else
           convection = std::make_unique<DryAdiabaticAdjustment>(10, min_convection_pressure_);
@@ -99,31 +112,72 @@ class TerrestrialPlanet : public GenericObject {
       const std::vector<std::pair<std::string, std::vector<std::string>>>& init_chemistry_configs,
       const std::vector<double>& init_chemistry_parameters)
     {
-      auto temp_profile = selectTemperatureProfile(temperature_type, temperature_config);
-
-      auto init_params = temperature_parameters;
-
-      temp_profile->calcProfile(init_params, surface_gravity, atmosphere);
-
-      // create init chemistry modules and compute chemical composition
+      // create init chemistry modules (shared by both init paths below)
       std::vector<std::unique_ptr<Chemistry>> init_chemistry;
       for (auto& [type, params] : init_chemistry_configs)
         init_chemistry.push_back(selectChemistryModule(type, params));
 
-      size_t param_offset = 0;
-      for (auto& chem : init_chemistry)
-      {
-        std::vector<double> params(
-          init_chemistry_parameters.begin() + param_offset,
-          init_chemistry_parameters.begin() + param_offset + chem->nbParameters());
-        param_offset += chem->nbParameters();
+      auto runInitChemistry = [&]() {
+        size_t param_offset = 0;
+        for (auto& chem : init_chemistry)
+        {
+          std::vector<double> params(
+            init_chemistry_parameters.begin() + param_offset,
+            init_chemistry_parameters.begin() + param_offset + chem->nbParameters());
+          param_offset += chem->nbParameters();
 
-        chem->calcChemicalComposition(
-          params,
-          atmosphere.temperature,
-          atmosphere.pressure,
-          atmosphere.number_densities,
-          atmosphere.mean_molecular_weight);
+          chem->calcChemicalComposition(
+            params,
+            atmosphere.temperature,
+            atmosphere.pressure,
+            atmosphere.number_densities,
+            atmosphere.mean_molecular_weight);
+        }
+      };
+
+      if (temperature_type == "adiabat")
+      {
+        // "adiabat": T_surface down-integrated along the ACTIVE convection scheme's neutrality
+        // gradient (dry, moist, mlt...), reduced 2%, floored at T_stratosphere -- clima's start.
+        // The 2% bias puts every link on the STABLE side of the scheme's own threshold, which is
+        // what lets the MLT corrector skip its easy-start homotopy (measured: moist n=100 in 15
+        // iterations instead of 36; Manabe-Wetherald in 61 instead of 126 -- same roots; see
+        // doc/mlt_convection_design.md Sec. 10.6). Using convectiveGradient keeps the init
+        // consistent with the configured scheme by construction -- no duplicated formula can rot.
+        // The gradient needs the composition, so: isothermal pass -> chemistry -> integrate ->
+        // chemistry again (the last pass matters for T-dependent chemistry, e.g. the
+        // Manabe-Wetherald humidity profile).
+        if (temperature_parameters.size() < 2)
+          throw InvalidInput(std::string("initialize"),
+            "adiabat initial profile needs parameters [T_surface, T_stratosphere]\n");
+        const double t_surf  = temperature_parameters[0];
+        const double t_strat = temperature_parameters[1];
+        const size_t n = atmosphere.pressure.size();
+
+        atmosphere.temperature.assign(n, t_surf);
+        runInitChemistry();
+
+        constexpr double stable_bias = 0.98;
+        for (size_t i = 1; i < n; ++i)
+        {
+          const double nab = convection
+            ? convection->convectiveGradient(
+                atmosphere.number_densities[i-1], atmosphere.temperature[i-1],
+                atmosphere.pressure[i-1])
+            : ThermodynamicData::adiabaticGradient(
+                atmosphere.number_densities[i-1], atmosphere.temperature[i-1]);
+          atmosphere.temperature[i] = std::max(t_strat,
+            atmosphere.temperature[i-1]
+              * std::pow(atmosphere.pressure[i]/atmosphere.pressure[i-1], stable_bias*nab));
+        }
+        runInitChemistry();
+      }
+      else
+      {
+        auto temp_profile = selectTemperatureProfile(temperature_type, temperature_config);
+        auto init_params = temperature_parameters;
+        temp_profile->calcProfile(init_params, surface_gravity, atmosphere);
+        runInitChemistry();
       }
 
       atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);

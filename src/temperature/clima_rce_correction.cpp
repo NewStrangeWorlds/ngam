@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <functional>
+#include <stdexcept>
 
 #include <Eigen/Dense>
 #include <unsupported/Eigen/NonLinearOptimization>
@@ -150,6 +151,12 @@ void ClimaRCECorrection::calcCorrection(
       convection->convectiveGradient(atmosphere.number_densities[j], atmosphere.temperature[j], atmosphere.pressure[j]));
   };
 
+  // ---- MLT smooth convection (Convection::providesFlux(), doc/mlt_convection_design.md): the
+  // convective flux F_c = C x^{3/2} on level links replaces the ENTIRE discrete-mask machinery --
+  // no probe, no slaving, no boundary controller; every level is a free radiative DOF and
+  // convection enters the residual as a smooth heating term (+ F_c in the flux-based rows). ------
+  const bool mlt = (convection != nullptr) && convection->providesFlux();
+
   // SETTLE GATE (used by the boundary logic below and the mask update further down): only move the
   // convective boundary once the inner Newton has SETTLED the profile at the current mask (clima
   // solves hybrj to convergence BEFORE moving the mask).
@@ -163,7 +170,7 @@ void ClimaRCECorrection::calcCorrection(
   // destabilises the boundary. The smoothing is for DETECTION ONLY; the residual/Jacobian use the
   // true profile. ----------------------------------------------------------------------------------
   std::vector<int> desired(n, 0);
-  if (convection != nullptr)
+  if (convection != nullptr && !mlt)
   {
     Atmosphere probe = atmosphere;   // copy: do not disturb the real profile
     // 1-2-1 detection smoothing (default ON; CLIMA_MASKSMOOTH=0 disables): without it the probe places the
@@ -664,6 +671,22 @@ void ClimaRCECorrection::calcCorrection(
   const bool ratio_other_mode = (netflux || centered || localre || newtonlike || ptc);
   const bool ratio = use_ratio && !ratio_other_mode;
 
+  // MLT convection is implemented for the ratio scheme only. The flux-difference plumbing below
+  // (mltFcLvl in the rows, Jacobian and metric) EXISTS but the pairing is guarded off: measured
+  // (2026-08-11, moist n=100), flux_divergence with all levels free stalls from a stable-side init
+  // (hybrj info=5, zero steps -- with x=0 everywhere the F_c block vanishes and the system is the
+  // documented diagonally-deficient pure-flux Newton), stalls from a marginally super-adiabatic
+  // init, and WANDERS from a warm start at the converged ratio root (28 K drift, no convergence):
+  // the F_c conditioning contribution scales as dF_c/dx ~ sqrt(eps) ~ 1e-2 of its bulk scale at
+  // the root, far too weak to replace the mask path's zone rows and slaving, which were
+  // load-bearing for this residual. flux_divergence therefore keeps requiring convection_type
+  // dry/moist. The F_c terms in the flux-conservation METRIC remain active for ratio+mlt runs
+  // (total-flux conservation is the physically meaningful diagnostic there).
+  if (mlt && !ratio)
+    throw std::runtime_error(
+      "MixingLengthConvection (convection_type=mlt*) requires the ratio_ul temperature "
+      "correction (measured: the flux_divergence pairing does not converge; use dry/moist there)");
+
   // CLIMA_RATIO_LUCY: the FULL Unsoeld-Lucy correction, in the residual. What the corrector previously
   // called "UL" is only Lucy's rank-one uniform LEVEL shift, applied POST-solve -- which moves the profile
   // off the root the Newton just found (measured: solver ||g||inf 1.3e-7 -> 5.7e-4 after the shift). The
@@ -855,6 +878,152 @@ void ClimaRCECorrection::calcCorrection(
   // deep is the CONVECTIVE troposphere (slaved), so this is moot there.
   std::vector<double> ross_diag(n, 0.0), ross_up(n, 0.0), ross_d(n, 0.0);
 
+  // ---- MLT convective flux on level links (doc/mlt_convection_design.md) -----------------------
+  // Link li sits between levels li and li+1 (the same layer as nl_dtau[li+1]). The flux law is
+  //   F_c = C * x^{3/2},  x = max(nabla - nabla_ad, 0),  C = 1/2 rho c_p T (lambda^2/H_p) sqrt(g/H_p)
+  // with lambda the Blackadar mixing length lambda = k z / (1 + k z/(alpha H_p)) (k = 0.4; z =
+  // altitude above the bottom boundary), all thermodynamic prefactors and nabla_ad FROZEN at the
+  // committed profile (the same operator split as frozen opacity: residual and Jacobian stay an
+  // exactly consistent pair through the inner solve, and the lag vanishes at the fixed point).
+  // Only nabla(T) is live, so the analytic link derivatives below are the EXACT residual gradient.
+  std::vector<double> mlt_C, mlt_nad, mlt_idlnP;
+  if (mlt)
+  {
+    // easy-start homotopy: scale the flux law by mlt_sf_, doubling once the previous stage settled
+    // (raw residual + step size below the stage tolerance). While ramping, last_residual_ is floored
+    // (below) so the driver cannot declare convergence on a weakened convection.
+    // stage tolerance 0.3: the post-doubling residual decays ~5x per outer iteration (measured
+    // 2.6 -> 0.57 -> 0.10 -> 0.017), so waiting for 1e-2 costs ~5 iterations per stage and the
+    // 12-stage ramp exceeds the driver's iteration budget; doubling once the transient has decayed
+    // below O(0.3) is stable (the per-doubling imbalance is bounded by the physical F_c itself)
+    // and cuts the ramp to ~2 iterations per stage.
+    constexpr double mlt_sf_ini = 3e-4, mlt_stage_tol = 0.3;
+    if (mlt_sf_ < 0.0)
+    {
+      // AUTO-SKIP: the homotopy exists only to rescue a strongly super-adiabatic start (a dry
+      // adiabat on a moist atmosphere: x ~ 0.1 on every link -> unscaled flux ~1e3 x stellar).
+      // From a stable-side init (max link x small) the full-strength system converges directly --
+      // measured: moist n=100 in 15 iterations (= mask scheme) vs 36 with the ramp, same root.
+      double max_x0 = 0.0;
+      for (size_t li = 0; li + 1 < n; ++li)
+      {
+        const double dlnP = std::log(atmosphere.pressure[li] / atmosphere.pressure[li+1]);
+        if (dlnP <= 0.0) continue;
+        const double x = std::log(atmosphere.temperature[li]/atmosphere.temperature[li+1]) / dlnP
+                         - nablaAd(li, li+1);
+        max_x0 = std::max(max_x0, x);
+      }
+      // Stable-side is necessary but NOT sufficient: the skip also needs the init to be CLOSE to
+      // the converged zone. A surface-driven troposphere (target_flux = 0) is initialised on the
+      // adiabat, so stable-side means near the answer; a self-luminous deep (target_flux > 0)
+      // starts far from equilibrium and must WARM into its zone -- at full strength the Newton
+      // bangs into the flux knee from below (measured: BD unconverged at 100 it with sf=1, vs 18
+      // with the ramp). Ramp whenever target_flux > 0.
+      constexpr double ramp_free_x = 0.02;
+      mlt_sf_ = std::getenv("MLT_SF_INI") ? std::atof(std::getenv("MLT_SF_INI"))
+              : ((max_x0 < ramp_free_x && target_flux <= 0.0) ? 1.0 : mlt_sf_ini);
+      if (std::getenv("CLIMA_DBG"))
+        std::fprintf(stderr, "  [mlt] init max_x=%.4f -> sf_ini=%.3e\n", max_x0, mlt_sf_);
+    }
+    else if (mlt_sf_ < 1.0 && mlt_prev_resid_ >= 0.0
+             && std::max(mlt_prev_resid_, last_inner_change_) < mlt_stage_tol)
+      mlt_sf_ = std::min(1.0, 2.0*mlt_sf_);
+    if (std::getenv("CLIMA_DBG"))
+      std::fprintf(stderr, "  [mlt] sf=%.3e prev_resid=%.3e\n", mlt_sf_, mlt_prev_resid_);
+
+    const double alpha_mlt = std::max(1e-3, convection->fluxAlpha());
+    mlt_C.assign(n > 0 ? n-1 : 0, 0.0);
+    mlt_nad.assign(mlt_C.size(), 0.0);
+    mlt_idlnP.assign(mlt_C.size(), 0.0);
+    const double mlt_pmin = convection->fluxMinPressure();
+    for (size_t li = 0; li + 1 < n; ++li)
+    {
+      // pressure ceiling (see Convection::fluxMinPressure): no convective flux above it
+      if (atmosphere.pressure[li+1] < mlt_pmin) { mlt_C[li] = 0.0; continue; }
+      const double dlnP = std::log(atmosphere.pressure[li] / atmosphere.pressure[li+1]);
+      mlt_idlnP[li] = (dlnP > 0.0) ? 1.0/dlnP : 0.0;
+      mlt_nad[li]   = nablaAd(li, li+1);
+      const double rho = 0.5*(atmosphere.mass_density[li] + atmosphere.mass_density[li+1]);
+      const double Tm  = 0.5*(atmosphere.temperature[li]  + atmosphere.temperature[li+1]);
+      const double Hp  = 0.5*(atmosphere.scale_height[li] + atmosphere.scale_height[li+1]);
+      const double cp  = 0.5*(
+        ThermodynamicData::meanHeatCapacity(atmosphere.number_densities[li],   atmosphere.temperature[li]) +
+        ThermodynamicData::meanHeatCapacity(atmosphere.number_densities[li+1], atmosphere.temperature[li+1]));
+      const double z   = std::max(0.0,
+        0.5*(atmosphere.altitude[li] + atmosphere.altitude[li+1]) - atmosphere.altitude[0]);
+      constexpr double k_vk = 0.4;
+      // wall law only for objects with a genuine surface; a self-luminous domain bottom is an
+      // artificial cut, lambda = alpha H_p throughout (Convection::fluxBlackadarSurface)
+      const double lam = !convection->fluxBlackadarSurface()
+        ? ((Hp > 0.0) ? alpha_mlt*Hp : 0.0)
+        : ((Hp > 0.0 && z > 0.0) ? k_vk*z / (1.0 + k_vk*z/(alpha_mlt*Hp)) : 0.0);
+      mlt_C[li] = (Hp > 0.0)
+        ? mlt_sf_ * 0.5 * rho * cp * Tm * (lam*lam/Hp) * std::sqrt(std::max(surface_gravity, 0.0)/Hp) : 0.0;
+    }
+  }
+  // convective flux on link li for a trial profile T (0 when stably stratified)
+  auto mltLink = [&](const std::vector<double>& T, size_t li) -> double
+  {
+    const double x = std::log(T[li]/T[li+1]) * mlt_idlnP[li] - mlt_nad[li];
+    return (x > 0.0) ? mlt_C[li] * x * std::sqrt(x) : 0.0;
+  };
+  // d F_c(link li)/dT_li (dlo) and /dT_{li+1} (dhi); both -> 0 as x -> 0+ (the C1 handover)
+  auto mltLinkDeriv = [&](const std::vector<double>& T, size_t li, double& dlo, double& dhi)
+  {
+    dlo = dhi = 0.0;
+    const double x = std::log(T[li]/T[li+1]) * mlt_idlnP[li] - mlt_nad[li];
+    if (x <= 0.0) return;
+    const double f = 1.5 * mlt_C[li] * std::sqrt(x) * mlt_idlnP[li];
+    dlo =  f / std::max(T[li],   1.0);
+    dhi = -f / std::max(T[li+1], 1.0);
+  };
+  // volumetric convective heating at level i in the ratio numerator's units (per volume per
+  // steradian): q_i = -(dF_c/dz)_i / (4 pi), conservative difference of the two adjacent links
+  // (one-sided at the top; the surface level i=0 keeps its flux-anchor row, which carries F_c
+  // explicitly instead).
+  auto mltQ = [&](const std::vector<double>& T, size_t i) -> double
+  {
+    if (!mlt || i == 0 || n < 2) return 0.0;
+    const double f_below = mltLink(T, i-1);
+    const double f_above = (i+1 < n) ? mltLink(T, i) : 0.0;
+    const double dz = (i+1 < n)
+      ? 0.5*std::abs(atmosphere.altitude[i+1] - atmosphere.altitude[i-1])
+      : std::abs(atmosphere.altitude[i] - atmosphere.altitude[i-1]);
+    return (dz > 0.0) ? (f_below - f_above) / dz / (4.0*M_PI) : 0.0;
+  };
+  // LEVEL-collocated convective flux, for the difference-form (flux_divergence) rows and the
+  // flux-conservation metric: centered link average in the interior, one-sided at the ends (level
+  // 0 = the surface link, matching the surface row; the top level = the topmost link).
+  auto mltFcLvl = [&](const std::vector<double>& T, size_t i) -> double
+  {
+    if (!mlt || n < 2) return 0.0;
+    if (i == 0)     return mltLink(T, 0);
+    if (i == n-1)   return mltLink(T, n-2);
+    return 0.5*(mltLink(T, i-1) + mltLink(T, i));
+  };
+
+  // MLT_DUMP: per-call anatomy of the convective term (first 40 calls): committed-profile link
+  // superadiabaticity, flux, heating-to-emission ratio q/den. Diagnoses stalls (which row, and
+  // whether the term or its normalisation is the problem).
+  if (mlt && std::getenv("MLT_DUMP"))
+  {
+    static int mlt_dump_calls = 0;
+    if (mlt_dump_calls < 40)
+    {
+      ++mlt_dump_calls;
+      std::fprintf(stderr, "  [mltdump] call=%d sf=%.3e  (lv P T x Fc q/den nad)\n", mlt_dump_calls, mlt_sf_);
+      for (size_t i = 1; i + 1 < n && i < 30; ++i)
+      {
+        const double x = std::log(atmosphere.temperature[i]/atmosphere.temperature[i+1]) * mlt_idlnP[i] - mlt_nad[i];
+        double num, den, C; ratioSums(atmosphere.temperature, i, num, den, C);
+        const double q = mltQ(atmosphere.temperature, i);
+        std::fprintf(stderr, "  [mltdump] %zu %.3e %.2f %+.4f %.3e %+.3e %.4f\n",
+          i, atmosphere.pressure[i], atmosphere.temperature[i], x,
+          mltLink(atmosphere.temperature, i), (den > 0.0) ? q/den : 0.0, mlt_nad[i]);
+      }
+    }
+  }
+
   // ---- residual assembler: clima's heat-capacity-weighted flux DIFFERENCES over the reduced DOFs.
   // clima forms fluxes(i)=f_total(i)-f_total(i-1) (and fluxes(0)=f_total(0) at the surface), so we use
   // exactly that. Because the Jacobian below is a finite difference of THIS residual, the two are
@@ -862,12 +1031,19 @@ void ClimaRCECorrection::calcCorrection(
   // Full Unsoeld-Lucy correction dB_i (level + cumulative flux-error integral), from the measured flux.
   // tau increases DOWNWARD from TOA; ngam's index increases UPWARD, so integrate from i=n-1 down to 0.
   // nl_dtau[k] is the optical thickness of the layer between levels k-1 and k.
-  auto lucyVec = [&](const std::vector<double>& F, std::vector<double>& dB) {
+  // MLT: the conserved column quantity is F_rad + F_c, so the Lucy level+gradient terms must use the
+  // TOTAL flux deviation -- anchoring F_rad alone would re-introduce the seam a convective zone
+  // carries (design note Sec.2b). The layer-mean convective flux in the [i,i+1] layer is exactly the
+  // link flux mltLink(T,i).
+  auto lucyVec = [&](const std::vector<double>& F, const std::vector<double>& T, std::vector<double>& dB) {
     dB.assign(n, 0.0);
     if (n < 2) return;
-    dB[n-1] = (F[n-1] - target_flux) / (2.0*M_PI);          // level: Eddington top boundary J(0)=2H(0)
+    const double fc_top = mlt ? mltLink(T, n-2) : 0.0;
+    dB[n-1] = (F[n-1] + fc_top - target_flux) / (2.0*M_PI);  // level: Eddington top boundary J(0)=2H(0)
     for (int i = static_cast<int>(n)-2; i >= 0; --i)
-      dB[i] = dB[i+1] + (3.0/(4.0*M_PI)) * 0.5*((F[i]-target_flux) + (F[i+1]-target_flux)) * nl_dtau[i+1];
+      dB[i] = dB[i+1] + (3.0/(4.0*M_PI))
+        * (0.5*((F[i]-target_flux) + (F[i+1]-target_flux)) + (mlt ? mltLink(T, i) : 0.0))
+        * nl_dtau[i+1];
   };
 
   auto assembleG = [&](const std::vector<double>& F, const std::vector<double>& NH, const std::vector<double>& T, std::vector<double>& g)
@@ -876,7 +1052,7 @@ void ClimaRCECorrection::calcCorrection(
     std::vector<double> cumF;
     if (ratio && ratio_flux && ratio_perlevel) cumFvec(T, cumF);   // per-level blend only
     std::vector<double> lucyB;
-    if (lucy) lucyVec(F, lucyB);                                   // full Unsoeld-Lucy correction
+    if (lucy) lucyVec(F, T, lucyB);                                // full Unsoeld-Lucy correction
     for (size_t r = 0; r < m; ++r)
     {
       const size_t i = unk[r];
@@ -899,7 +1075,9 @@ void ClimaRCECorrection::calcCorrection(
         g[r] = (F[z.upper] - f_lower) / (zone_fluxnorm ? Fnorm : ceff_zone[zi]);
       }
       else if (i == 0)                               // bottom DOF: F_net[0] -> F_star (0 = terrestrial
-        g[r] = (F[0] - target_flux) / ceff[0];       // surface balance; sigma T_int^4 self-luminous)
+        // MLT: the surface loses F_c through the lowest link (sensible heat drawn into the
+        // convective column) -- the surface balance must include it (clima's surface_heat_flow).
+        g[r] = (F[0] + (mlt && n >= 2 ? mltLink(T, 0) : 0.0) - target_flux) / ceff[0];
       else                                           // radiative level
       {
         // RCB HANDOVER. The collocated (ratio) residual is purely LOCAL, so for the first radiative level
@@ -921,7 +1099,10 @@ void ClimaRCECorrection::calcCorrection(
         if (ratio && above_rcb)
                                       g[r] = (F[i] - F[i-1]) / ceff[i];   // flux continuity across the RCB
         else if (ratio)             { double num, den, C; ratioSums(T, i, num, den, C);
-                                      const double gre = (den > 0.0) ? (num / den - 1.0) : 0.0;
+                                      // MLT: local RE becomes radiative + convective balance,
+                                      // 4pi(num - den) - dF_c/dz = 0 -> (num + q)/den = 1.
+                                      const double q = mltQ(T, i);
+                                      const double gre = (den > 0.0) ? ((num + q) / den - 1.0) : 0.0;
                                       const double gflux = 0.0;
                                       // LEVEL ANCHOR: the ratio system is square (zone budget + one local-RE
                                       // row per radiative level), so nothing is left over to pin the absolute
@@ -944,7 +1125,9 @@ void ClimaRCECorrection::calcCorrection(
                                         gsm = thick_smooth *
                                           (T[i-2] - 4.0*T[i-1] + 6.0*T[i] - 4.0*T[i+1] + T[i+2]) / T[i];
                                       g[r] = ratio_xi*gre + gflux + glucy + gsm; }
-        else                          g[r] = (F[i] - F[i-1]) / ceff[i];             // one-sided backward (clima)
+        else                          // one-sided backward (clima); MLT: difference the TOTAL flux
+          g[r] = (F[i] - F[i-1]
+                  + (mlt ? (mltFcLvl(T, i) - mltFcLvl(T, i-1)) : 0.0)) / ceff[i];
       }
     }
   };
@@ -996,6 +1179,26 @@ void ClimaRCECorrection::calcCorrection(
     const std::vector<std::vector<double>>& NHJ = radiation_field.net_heating_jacobian;
     const std::vector<std::vector<double>>& MK  = radiation_field.meanint_kappa_jacobian;
 
+    // MLT: per-link flux derivatives at the linearisation point (= atmosphere.temperature, set by
+    // the want_jac eval that preceded this rebuild). Exact for the frozen-prefactor flux law, so
+    // residual and Jacobian stay a consistent pair (NLEQ-ERR rejects inconsistent operators).
+    std::vector<double> mj_dlo, mj_dhi;
+    if (mlt && n >= 2)
+    {
+      mj_dlo.assign(n-1, 0.0); mj_dhi.assign(n-1, 0.0);
+      for (size_t li = 0; li + 1 < n; ++li)
+        mltLinkDeriv(atmosphere.temperature, li, mj_dlo[li], mj_dhi[li]);
+    }
+    // d(F_c at LEVEL i)/dT scattered into `row` with sign/scale -- must mirror mltFcLvl exactly
+    auto addFcLvlDeriv = [&](size_t i, double s, std::vector<double>& row)
+    {
+      if (i == 0)          { row[0]   += s*mj_dlo[0];       row[1] += s*mj_dhi[0]; }
+      else if (i == n-1)   { row[n-2] += s*mj_dlo[n-2];     row[n-1] += s*mj_dhi[n-2]; }
+      else                 { row[i-1] += 0.5*s*mj_dlo[i-1];
+                             row[i]   += 0.5*s*(mj_dhi[i-1] + mj_dlo[i]);
+                             row[i+1] += 0.5*s*mj_dhi[i]; }
+    };
+
     // ---- AGB cumulative-heating flux Jacobian (clima_..._linearisation.cpp / thesis 3.64). The flux
     // deviation is the depth integral of the local heating S = num - den, so d(F)/dT is the CUMULATIVE
     // integral of the heating Jacobian H = M - C (M = meanint_kappa_jacobian, C = sum w kappa dB/dT) --
@@ -1010,9 +1213,21 @@ void ClimaRCECorrection::calcCorrection(
     {
       lucyJ.assign(n, std::vector<double>(n, 0.0));
       for (size_t j = 0; j < n; ++j) lucyJ[n-1][j] = NFJ[n-1][j] / (2.0*M_PI);
+      if (mlt && n >= 2)   // top-boundary convective term (matches lucyVec's fc_top)
+      {
+        lucyJ[n-1][n-2] += mj_dlo[n-2] / (2.0*M_PI);
+        lucyJ[n-1][n-1] += mj_dhi[n-2] / (2.0*M_PI);
+      }
       for (int i = static_cast<int>(n)-2; i >= 0; --i)
+      {
         for (size_t j = 0; j < n; ++j)
           lucyJ[i][j] = lucyJ[i+1][j] + (3.0/(4.0*M_PI))*0.5*(NFJ[i][j] + NFJ[i+1][j])*nl_dtau[i+1];
+        if (mlt)             // layer convective flux mltLink(T,i): d/dT_i, d/dT_{i+1}
+        {
+          lucyJ[i][i]   += (3.0/(4.0*M_PI)) * mj_dlo[i] * nl_dtau[i+1];
+          lucyJ[i][i+1] += (3.0/(4.0*M_PI)) * mj_dhi[i] * nl_dtau[i+1];
+        }
+      }
     }
 
     std::vector<std::vector<double>> cumH;   // [i][j] cumulative heating Jacobian from the surface (i=0)
@@ -1047,7 +1262,9 @@ void ClimaRCECorrection::calcCorrection(
       {
         double num, den, C; ratioSums(atmosphere.temperature, i, num, den, C);
         ratio_inv = (den > 0.0) ? 1.0/den : 0.0;
-        ratio_diag_corr = num * ratio_inv * ratio_inv * C;   // d(num/den)/dT_i den-term: -(num/den^2) C
+        // MLT: the residual numerator is (num + q), so the den-derivative term carries it too
+        const double q_committed = mlt ? mltQ(atmosphere.temperature, i) : 0.0;
+        ratio_diag_corr = (num + q_committed) * ratio_inv * ratio_inv * C;   // -(num+q)/den^2 * C
         // STABLE Planck-slope diagonal C/den = <dln B/dT>_kappa (a kappa-weighted average, FINITE as
         // kappa->0, unlike num*C/den^2). This is the doc's -C_i/den_i; used by the Eq.19 blend instead of
         // the unstable exact ratio Jacobian terms (which carry 1/den, 1/den^2 and blow up at the thin top).
@@ -1100,6 +1317,11 @@ void ClimaRCECorrection::calcCorrection(
         const double sig_cgs = 5.670374e-5;         // -- no odd-moment cancellation at a boundary).
         row[0] = 4.0*sig_cgs*std::pow(std::max(atmosphere.temperature[0], 1.0), 3) / ceff[0];
       }
+      if (mlt && i == 0 && n >= 2)                  // MLT surface balance: d F_c(link 0)/dT_{0,1}
+      {
+        row[0] += mj_dlo[0] / ceff[0];
+        row[1] += mj_dhi[0] / ceff[0];
+      }
       // (skip for the RCB-handover level: its row is the flux difference, not the ratio form, so the
       //  ratio Planck-cooling diagonal must not be added on top of it)
       const bool rcb_handover_row = ratio && i > 0 && (slaved[i-1] || zone_of_dof[i-1] >= 0)
@@ -1107,6 +1329,23 @@ void ClimaRCECorrection::calcCorrection(
       if (ratio && zi < 0 && i != 0 && !rcb_handover_row)
       {
         row[i] -= ratio_xi * ratio_diag_corr;      // local Planck-cooling diagonal -xi*C_i/den_i
+        if (mlt && i >= 1)                          // d q_i/dT_l of the convective heating (matches mltQ)
+        {
+          const double dz = (i+1 < n)
+            ? 0.5*std::abs(atmosphere.altitude[i+1] - atmosphere.altitude[i-1])
+            : std::abs(atmosphere.altitude[i] - atmosphere.altitude[i-1]);
+          if (dz > 0.0)
+          {
+            const double s = ratio_xi * ratio_inv / (4.0*M_PI) / dz;
+            row[i-1] += s * mj_dlo[i-1];            // link below (i-1,i)
+            row[i]   += s * mj_dhi[i-1];
+            if (i+1 < n)
+            {
+              row[i]   -= s * mj_dlo[i];            // link above (i,i+1), entering with -F_c
+              row[i+1] -= s * mj_dhi[i];
+            }
+          }
+        }
         // optically-thick Nyquist penalty stencil (must match assembleG's gsm; the full-stencil
         // free-radiative guard means no slaved/zone folding is involved). The d(1/T_i) term of the
         // normalisation is O(s4/T^2), ~1e-6 of the stencil weights -- omitted.
@@ -1121,6 +1360,11 @@ void ClimaRCECorrection::calcCorrection(
       }
       else if (ptc_blend && zi < 0 && i != 0)        // Eq.19 Jacobian: + w_i d g^RE/dT_i ~ -w_i C/den
         row[i] -= ptc_w[i] * planck_slope;           // STABLE Planck-slope diagonal -> conditions the thin top (NFJ + C/dt deep)
+      if (mlt && !ratio && zi < 0 && i != 0)          // flux_divergence rows: d(Fc_lvl[i]-Fc_lvl[i-1])/dT
+      {
+        addFcLvlDeriv(i,   +1.0/ceff[i], row);
+        addFcLvlDeriv(i-1, -1.0/ceff[i], row);
+      }
       if (rd > 0.0 && i >= 1)                         // Rosseland deep preconditioner: the genuine diffusion
       {                                              // self + DOWN-coupling terms (couples level i to i-1)
         row[i]   += rd * ross_diag[i] / Fnorm;       // dF[i]/dT[i]   < 0
@@ -1417,7 +1661,27 @@ void ClimaRCECorrection::calcCorrection(
     inner_change = std::max(inner_change, std::abs(T_final[i] - T_base[i]) / std::max(T_final[i], 1.0));
   last_inner_change_ = inner_change;
 
+  // MLT_RELAX (diagnostic knob): under-relax the commit, T <- T_old + gamma (T_root - T_old).
+  // Damps the OUTER operator-split iteration when the composition feedback (Manabe-Wetherald
+  // water, ~6%/K) displaces the frozen-opacity root faster than the split contracts -- the mask
+  // scheme never sees this because the affected near-surface levels are slaved (no local-RE rows).
+  if (mlt)
+  {
+    static const double mlt_relax = std::getenv("MLT_RELAX") ? std::atof(std::getenv("MLT_RELAX")) : 1.0;
+    if (mlt_relax > 0.0 && mlt_relax < 1.0)
+      for (size_t i = 0; i < n; ++i)
+        T_final[i] = T_base[i] + mlt_relax * (T_final[i] - T_base[i]);
+  }
   atmosphere.temperature = T_final;
+  // MLT: expose the convective region diagnostically (levels bounding an active-flux link) -- the
+  // mask machinery is bypassed, so this is the analogue of AGNI's mask_c, for output/driver display.
+  if (mlt)
+  {
+    std::fill(atmosphere.convective.begin(), atmosphere.convective.end(), 0);
+    for (size_t li = 0; li + 1 < n; ++li)
+      if (mltLink(T_final, li) > 0.0)
+      { atmosphere.convective[li] = 1; atmosphere.convective[li+1] = 1; }
+  }
 
   // ---- convergence metric (clima form, multi-stream-honest tolerance + a settled gate). PRIMARY = the
   //      max per-level net-flux imbalance / incident stellar flux. This is the CREEP-PROOF check: a deep
@@ -1440,8 +1704,11 @@ void ClimaRCECorrection::calcCorrection(
     double res;
     // same bottom-boundary convention as assembleG: at the domain bottom the inflow is F_star
     if (zi >= 0) { const Zone& z = zones[zi]; const double low = (z.lower==0)?target_flux:Ffin[z.lower-1]; res = Ffin[z.upper]-low; }
-    else if (i == 0) res = Ffin[0] - target_flux;
-    else res = Ffin[i] - Ffin[i-1];   // ptc: actual net-flux imbalance (conservation)
+    // MLT: conservation is a statement about the TOTAL flux F_rad + F_c (in a convective zone the
+    // radiative flux alone is legitimately non-constant). Matches the assembleG rows.
+    else if (i == 0) res = Ffin[0] + (mlt ? mltFcLvl(T_final, 0) : 0.0) - target_flux;
+    else res = Ffin[i] - Ffin[i-1]
+             + (mlt ? (mltFcLvl(T_final, i) - mltFcLvl(T_final, i-1)) : 0.0);
     flux_resid = std::max(flux_resid, std::abs(res) / fnorm);
   }
   // the carved-out deep (incl. the surface endpoint when carved) is not in unk, but its flux conservation
@@ -1480,7 +1747,7 @@ void ClimaRCECorrection::calcCorrection(
     if (!row_dumped)
     {
       row_dumped = true;
-      std::vector<double> lucyB; lucyVec(Ffin, lucyB);
+      std::vector<double> lucyB; lucyVec(Ffin, T_final, lucyB);
       std::fprintf(stderr, "  [rowdump] lv P[bar] T dtau gre glucy (F-F*)/F* type\n");
       for (size_t i = 0; i < n; ++i)
       {
@@ -1496,7 +1763,12 @@ void ClimaRCECorrection::calcCorrection(
       }
     }
   }
+  // MLT ramp bookkeeping: gate the next stage on the RAW residual, and hold the reported residual
+  // above the driver threshold while convection is still weakened (a converged solution at
+  // sf < 1 is not a solution of the full problem).
+  mlt_prev_resid_ = own_resid;
   last_residual_ = mask_big_change ? 1.0 : std::max(own_resid, inner_change);
+  if (mlt && mlt_sf_ < 1.0) last_residual_ = std::max(last_residual_, 0.5);
 }
 
 

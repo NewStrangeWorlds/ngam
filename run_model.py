@@ -56,12 +56,12 @@ model = pyngam.BrownDwarf(
     use_variable_gravity=False,
     max_iterations=100,
     convergence_threshold=1e-5,
-    temperature_correction="ptc",
+    temperature_correction="ratio_ul",
     iteration_gamma=0.5,
     lre_fraction=0.5,
     ng_interval=0,
     use_convective_adjustment=True,
-    convection_type="dry",
+    convection_type="mlt",
     max_change_per_iteration=0.1,
     **model_config)
 

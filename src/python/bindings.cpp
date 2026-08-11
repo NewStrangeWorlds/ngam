@@ -48,7 +48,8 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
     double min_convection_pressure,
     double max_change_per_iteration,
     std::string temperature_correction,
-    std::vector<std::string> temperature_correction_parameters)
+    std::vector<std::string> temperature_correction_parameters,
+    std::vector<std::string> convection_parameters)
 {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     for (auto& [type, params] : chemistry_configs)
@@ -83,7 +84,8 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
         min_convection_pressure,
         max_change_per_iteration,
         temperature_correction,
-        temperature_correction_parameters);
+        temperature_correction_parameters,
+        convection_parameters);
 }
 
 
@@ -116,7 +118,8 @@ static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
     double min_convection_pressure,
     double max_change_per_iteration,
     std::string temperature_correction,
-    std::vector<std::string> temperature_correction_parameters)
+    std::vector<std::string> temperature_correction_parameters,
+    std::vector<std::string> convection_parameters)
 {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     for (auto& [type, params] : chemistry_configs)
@@ -180,7 +183,8 @@ static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
         min_convection_pressure,
         max_change_per_iteration,
         temperature_correction,
-        temperature_correction_parameters);
+        temperature_correction_parameters,
+        convection_parameters);
 }
 
 
@@ -214,7 +218,8 @@ static std::unique_ptr<GasPlanet> make_gas_planet(
     double min_convection_pressure,
     double max_change_per_iteration,
     std::string temperature_correction,
-    std::vector<std::string> temperature_correction_parameters)
+    std::vector<std::string> temperature_correction_parameters,
+    std::vector<std::string> convection_parameters)
 {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     for (auto& [type, params] : chemistry_configs)
@@ -278,7 +283,8 @@ static std::unique_ptr<GasPlanet> make_gas_planet(
         min_convection_pressure,
         max_change_per_iteration,
         temperature_correction,
-        temperature_correction_parameters);
+        temperature_correction_parameters,
+        convection_parameters);
 }
 
 
@@ -407,13 +413,14 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("convergence_threshold") = 1e-4,
             py::arg("iteration_gamma") = 0.5,
             py::arg("use_convective_adjustment") = true,
-            py::arg("convection_type") = "dry",
+            py::arg("convection_type") = "mlt",
             py::arg("ng_interval") = 10,
             py::arg("lre_fraction") = 0.0,
             py::arg("min_convection_pressure") = 1e-4,
             py::arg("max_change_per_iteration") = 0.1,
             py::arg("temperature_correction") = "ratio_ul",
             py::arg("temperature_correction_parameters") = std::vector<std::string>{},
+            py::arg("convection_parameters") = std::vector<std::string>{},
             py::keep_alive<1, 2>())
         .def("initialize", &BrownDwarf::initialize,
             py::arg("temperature_type"),
@@ -456,13 +463,14 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("convergence_threshold") = 1e-4,
             py::arg("iteration_gamma") = 0.5,
             py::arg("use_convective_adjustment") = true,
-            py::arg("convection_type") = "dry",
+            py::arg("convection_type") = "mlt",
             py::arg("ng_interval") = 10,
             py::arg("lre_fraction") = 0.0,
             py::arg("min_convection_pressure") = 1e-4,
             py::arg("max_change_per_iteration") = 0.1,
             py::arg("temperature_correction") = "ratio_ul",
             py::arg("temperature_correction_parameters") = std::vector<std::string>{},
+            py::arg("convection_parameters") = std::vector<std::string>{},
             py::keep_alive<1, 2>())
         .def("initialize", &TerrestrialPlanet::initialize,
             py::arg("temperature_type"),
@@ -511,13 +519,14 @@ PYBIND11_MODULE(pyngam, m) {
             py::arg("convergence_threshold") = 1e-4,
             py::arg("iteration_gamma") = 0.5,
             py::arg("use_convective_adjustment") = true,
-            py::arg("convection_type") = "dry",
+            py::arg("convection_type") = "mlt",
             py::arg("ng_interval") = 10,
             py::arg("lre_fraction") = 0.0,
             py::arg("min_convection_pressure") = 1e-4,
             py::arg("max_change_per_iteration") = 0.1,
             py::arg("temperature_correction") = "ratio_ul",
             py::arg("temperature_correction_parameters") = std::vector<std::string>{},
+            py::arg("convection_parameters") = std::vector<std::string>{},
             py::keep_alive<1, 2>())
         .def("initialize", &GasPlanet::initialize,
             py::arg("temperature_type"),

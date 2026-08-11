@@ -112,6 +112,7 @@ set(LIB_SRC
   src/temperature/linearised_temperature_correction.cpp
   src/temperature/clima_rce_correction.cpp
   src/convection/dry_adiabatic.cpp
+  src/convection/mixing_length.cpp
   src/convection/moist_adiabatic.cpp
 )
 

@@ -40,6 +40,7 @@
 #include "../chemistry/select_chemistry.h"
 #include "../convection/dry_adiabatic.h"
 #include "../convection/moist_adiabatic.h"
+#include "../convection/mixing_length.h"
 
 
 
@@ -67,13 +68,14 @@ class BrownDwarf : public GenericObject {
       double convergence_threshold_ = 1e-4,
       double iteration_gamma_ = 0.5,
       bool use_convective_adjustment_ = true,
-      std::string convection_type_ = "dry",
+      std::string convection_type_ = "mlt",
       size_t ng_interval_ = 10,
       double lre_fraction_ = 0.0,
       double min_convection_pressure_ = 1e-4,
       double max_change_per_iteration_ = 0.1,
       std::string temperature_correction_ = "ratio_ul",
-      std::vector<std::string> temperature_correction_parameters_ = {})
+      std::vector<std::string> temperature_correction_parameters_ = {},
+      std::vector<std::string> convection_parameters_ = {})
       : GenericObject(
           spectral_grid,
           nb_grid_points,
@@ -104,7 +106,17 @@ class BrownDwarf : public GenericObject {
     {
       if (use_convective_adjustment_)
       {
-        if (convection_type_ == "moist")
+        if (convection_type_ == "mlt" || convection_type_ == "mlt_moist")
+        {
+          // smooth mixing-length convection (doc/mlt_convection_design.md); requires ratio_ul.
+          // No Blackadar wall law: a self-luminous domain bottom is not a surface.
+          const double alpha =
+            convection_parameters_.empty() ? 1.0 : std::stod(convection_parameters_[0]);
+          convection = std::make_unique<MixingLengthConvection>(
+            convection_type_ == "mlt_moist", alpha, min_convection_pressure_,
+            /*blackadar_surface=*/false);
+        }
+        else if (convection_type_ == "moist")
           convection = std::make_unique<MoistAdiabaticAdjustment>(10, min_convection_pressure_);
         else
           convection = std::make_unique<DryAdiabaticAdjustment>(10, min_convection_pressure_);

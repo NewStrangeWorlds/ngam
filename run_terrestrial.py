@@ -68,7 +68,7 @@ mix_ratios = [0.02, 0.98]  # H2, O2, H2O, N2
 
 model = pyngam.TerrestrialPlanet(
     spectral_grid=grid,
-    nb_grid_points=200,
+    nb_grid_points=100,
     atmos_boundary_pressures=[1, 1e-5],
     cross_section_file_path=opacity_data_path,
     opacity_species_symbol=species_symbols,
@@ -88,13 +88,13 @@ model = pyngam.TerrestrialPlanet(
     surface_type="variable_albedo",       # variable: albedo from file
     surface_params=["data/Earth/earth_spectral_surface_reflection.dat"],  #albedo file
     chemistry_parameters=mix_ratios,
-    max_iterations=100,
-    temperature_correction="ratio_ul",
+    max_iterations=200,
+    temperature_correction="flux_divergence",
     convergence_threshold=1e-5,
     iteration_gamma=0.2,
     lre_fraction=0.1,
     use_convective_adjustment=True,
-    convection_type="moist",
+    convection_type="mlt",
     ng_interval=0,
     max_change_per_iteration=0.1)
 
@@ -167,23 +167,17 @@ model = pyngam.TerrestrialPlanet(
 #     mean_molecular_weight=ds["mean_molecular_weight"].values.tolist())
 # ds.close()
 
-# clima-style start: dry adiabat from a guessed surface temperature up to a tropopause floor, then
-# isothermal -> the Newton starts on the convective profile (not a radiative Milne profile).
+# clima-style start: an adiabat from a guessed surface temperature up to a stratosphere floor,
+# integrated along the ACTIVE convection scheme's neutrality gradient (dry, moist, mlt...) reduced
+# by 2%, so every layer starts on the stable side of the scheme's own threshold. This is what lets
+# the MLT corrector skip its easy-start homotopy (doc/mlt_convection_design.md Sec. 10.6).
 
 model.initialize(
-    temperature_type="milne",
+    temperature_type="adiabat",
     temperature_config=[],
-    temperature_parameters=[1e-2, 300.0],   # kappa_ross, T_eff (Milne init)
+    temperature_parameters=[288.0, 160.0],   # T_surface, T_stratosphere floor
     init_chemistry=[("fixed", ["data/Earth/earth_standard_composition.dat"])],
     init_chemistry_parameters=mix_ratios)
-
-_P = np.array(model.atmosphere.pressure)
-_Tsurf, _Ttrop, _nabla = 288.0, 160.0, 0.286
-_Tinit = np.maximum(_Ttrop, _Tsurf * (_P / _P[0])**_nabla)
-model.initialize_from_arrays(
-    temperature=_Tinit.tolist(),
-    number_densities=[list(r) for r in np.array(model.atmosphere.number_densities)],
-    mean_molecular_weight=list(np.array(model.atmosphere.mean_molecular_weight)))
 
 
 
