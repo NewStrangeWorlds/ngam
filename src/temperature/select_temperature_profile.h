@@ -13,6 +13,7 @@
 
 #include "milne_solution_temperature.h"
 #include "constant_temperature.h"
+#include "guillot_temperature.h"
 
 
 namespace ngam {
@@ -20,8 +21,8 @@ namespace ngam {
 //definition of the different chemistry modules with an
 //identifier, a keyword to be located in the config file and a short version of the keyword
 namespace temp_profile_modules{
-  enum id {milne, constant};
-  const std::vector<std::string> description {"milne", "const"};
+  enum id {milne, constant, guillot};
+  const std::vector<std::string> description {"milne", "const", "guillot"};
 }
 
 
@@ -57,6 +58,12 @@ inline std::unique_ptr<TemperatureProfile> selectTemperatureProfile(
 
     case temp_profile_modules::constant :
       return std::make_unique<ConstantTemperature>();
+
+    // Guillot (2010) irradiated-analytic profile; temperature_config[0] selects "beam" or
+    // "isotropic" (default). The recommended init for irradiated gas planets.
+    case temp_profile_modules::guillot :
+      return std::make_unique<GuillotTemperature>(
+        parameters.empty() ? std::string("isotropic") : parameters[0]);
   }
 
   return nullptr;

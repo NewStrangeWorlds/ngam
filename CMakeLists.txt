@@ -106,6 +106,7 @@ set(LIB_SRC
   src/chemistry/fastchem_chemistry.cpp
   src/chemistry/fixed_chemistry.cpp
   src/chemistry/mw_humidity_chemistry.cpp
+  src/temperature/guillot_temperature.cpp
   src/temperature/milne_solution_temperature.cpp
   src/temperature/time_stepping_temperature.cpp
   src/temperature/time_stepping_lre_temperature.cpp
