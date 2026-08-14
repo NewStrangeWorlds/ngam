@@ -102,11 +102,20 @@ inline std::unique_ptr<TemperatureCorrection> selectTemperatureCorrection(
   // tried and measured NOT to converge with all levels free (its zone rows/slaving are
   // load-bearing -- see the note in clima_rce_correction.cpp); the relaxation schemes would
   // silently run without convection. Fail loudly instead.
+  // EXCEPTION (experimental, CLIMA_TIKH>0): flux_divergence+mlt is unlocked when the Tikhonov
+  // objective regularisation is active -- the measured stall was the diagonally-deficient
+  // pure-flux Newton, which is exactly the near-null-mode disease the regularisation removes
+  // (see the corresponding gate in clima_rce_correction.cpp).
+  const bool tikh_active = [] {
+    const char* e = std::getenv("CLIMA_TIKH");
+    return e != nullptr && std::atof(e) > 0.0; }();
   if (setup.convection != nullptr && setup.convection->providesFlux()
-      && module_id != temperature_correction_modules::ratio_ul)
+      && module_id != temperature_correction_modules::ratio_ul
+      && !(module_id == temperature_correction_modules::flux_divergence && tikh_active))
     throw InvalidInput(std::string("forward_model.config"),
       "convection_type mlt/mlt_moist requires temperature_correction ratio_ul; "
-      "use convection_type dry/moist with the other schemes\n");
+      "use convection_type dry/moist with the other schemes "
+      "(or flux_divergence with CLIMA_TIKH>0 for the experimental regularised pairing)\n");
 
   if (module_id == temperature_correction_modules::ratio_ul)
     return std::make_unique<ClimaRCECorrection>(

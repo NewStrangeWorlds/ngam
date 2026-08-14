@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
+#include <string>
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
@@ -156,6 +157,20 @@ void ClimaRCECorrection::calcCorrection(
   // no probe, no slaving, no boundary controller; every level is a free radiative DOF and
   // convection enters the residual as a smooth heating term (+ F_c in the flux-based rows). ------
   const bool mlt = (convection != nullptr) && convection->providesFlux();
+
+  // CLIMA_TIKH=alpha: Tikhonov 4th-difference regularisation in the objective (tests A1/A2);
+  // read at function scope: it unlocks the mlt+flux pairing (see the guard further down), the
+  // deep-slaving block reads it, and the convergence gate at the end is mode-aware.
+  static const double tikh_alpha = [] {
+    const char* e = std::getenv("CLIMA_TIKH");
+    return (e != nullptr) ? std::atof(e) : 0.0; }();
+  // The historical mlt+flux stall is the diagonally-deficient pure-flux Newton (at x=0 the F_c
+  // block vanishes) -- exactly the near-null-mode disease the Tikhonov objective regularisation
+  // removes. With CLIMA_TIKH>0 the pairing is unlocked (experimental, "three defects" note
+  // test A1: single-scheme configuration) and routed through the NLEQ solver.
+  // (use_ratio equals the later `ratio` flag whenever no experimental residual mode is
+  // selected; all those modes are constexpr-off.)
+  const bool tikh_flux_mlt = mlt && !use_ratio && tikh_alpha > 0.0;
 
   // SETTLE GATE (used by the boundary logic below and the mask update further down): only move the
   // convective boundary once the inner Newton has SETTLED the profile at the current mask (clima
@@ -458,6 +473,65 @@ void ClimaRCECorrection::calcCorrection(
     for (size_t i = 0; i < n; ++i) mask[i] = (static_cast<int>(i) <= ktop) ? 1 : 0;
   }
 
+  // ---- FIX A (hybrid MLT / deep slaving; "three defects" follow-up). For a SELF-LUMINOUS
+  // flux-scheme MLT run, the deep convective interior is stiff in SHAPE and blind in LEVEL:
+  // at the converged state F_c = C x^{3/2} = F* gives x = (F*/C)^{2/3} ~ 1e-6 deep, so the
+  // MLT rows pin nabla with dF_c/dnabla ~ (3/2)F*/x while the uniform-lnT level mode is
+  // sensed only by the (noise-floor) radiative response -- measured: a +5 K uniform shift on
+  // the convective interior changes the emergent flux by 1.8e-4 F*, CONSTANT above the zone,
+  // i.e. visible only to a block-SPANNING row. The mask path's zone row was that row. So:
+  // slave the deep interior (eps below CLIMA_MLT_DEEPEPS, default 3e-4 -- orders of magnitude
+  // above the ~1e-6 bottom and below the ~1e-2 RCB values, so the placement cannot flap) to
+  // the adiabat via the EXISTING zone machinery, whose budget row spans the block; keep MLT
+  // free above (everything MLT bought -- the C1 handover -- is at the RCB, not at 100 bar).
+  // The handover mismatch is O(eps) per scale height: no seam at this threshold. Hysteresis:
+  // +-1-level criterion drift keeps the previous top (mask_band = 0 for self-luminous, so an
+  // unhysteresed flip would reset the convergence metric every iteration).
+  // Scope: the flux+MLT pairing (tikh_flux_mlt) needs this to be solvable at all; the ratio
+  // scheme's den-diagonal already pins the deep level mode, so the validated default is left
+  // untouched (opt-in via CLIMA_MLT_DEEPSLAVE for experiments).
+  if (mlt && target_flux > 0.0 && n >= 5
+      && (tikh_flux_mlt || std::getenv("CLIMA_MLT_DEEPSLAVE") != nullptr))
+  {
+    static const double deep_eps = [] {
+      const char* e = std::getenv("CLIMA_MLT_DEEPEPS");
+      return (e != nullptr) ? std::atof(e) : 3e-4; }();
+    const double alpha_mlt_d = std::max(1e-3, convection->fluxAlpha());
+    int k_top = -1;
+    for (size_t li = 0; li + 1 < n; ++li)
+    {
+      // UNRAMPED flux-law prefactor C (mirrors the mlt_C construction below, sf excluded):
+      // the criterion asks where the CONVERGED x = (F*/C)^{2/3} is tiny, independent of the
+      // easy-start homotopy state.
+      const double rho = 0.5*(atmosphere.mass_density[li] + atmosphere.mass_density[li+1]);
+      const double Tm  = 0.5*(atmosphere.temperature[li]  + atmosphere.temperature[li+1]);
+      const double Hp  = 0.5*(atmosphere.scale_height[li] + atmosphere.scale_height[li+1]);
+      const double cp  = 0.5*(
+        ThermodynamicData::meanHeatCapacity(atmosphere.number_densities[li],   atmosphere.temperature[li]) +
+        ThermodynamicData::meanHeatCapacity(atmosphere.number_densities[li+1], atmosphere.temperature[li+1]));
+      if (Hp <= 0.0) break;
+      const double lam = alpha_mlt_d*Hp;   // self-luminous: no wall law (fluxBlackadarSurface)
+      const double C_full = 0.5 * rho * cp * Tm * (lam*lam/Hp)
+                          * std::sqrt(std::max(surface_gravity, 0.0)/Hp);
+      if (C_full <= 0.0) break;
+      const double eps_conv = std::pow(target_flux / C_full, 2.0/3.0);
+      if (eps_conv < deep_eps) k_top = static_cast<int>(li) + 1;
+      else break;
+    }
+    std::vector<int> deep_mask(n, 0);
+    if (k_top >= 2)
+      for (int i = 0; i <= k_top; ++i) deep_mask[i] = 1;
+    // hysteresis: keep the previous top for a +-1 criterion drift
+    if (have_prev)
+    {
+      int prev_top = -1;
+      for (int i = static_cast<int>(n)-1; i >= 0; --i) if (prev_mask_[i]) { prev_top = i; break; }
+      if (prev_top >= 2 && std::abs(prev_top - k_top) == 1)
+      { deep_mask.assign(n, 0); for (int i = 0; i <= prev_top; ++i) deep_mask[i] = 1; }
+    }
+    mask = deep_mask;
+  }
+
   int mask_shift = 0;
   if (have_prev) for (size_t i = 0; i < n; ++i) mask_shift += (mask[i] != prev_mask_[i]);
   const bool mask_changed = (mask_shift > 0);
@@ -682,10 +756,11 @@ void ClimaRCECorrection::calcCorrection(
   // load-bearing for this residual. flux_divergence therefore keeps requiring convection_type
   // dry/moist. The F_c terms in the flux-conservation METRIC remain active for ratio+mlt runs
   // (total-flux conservation is the physically meaningful diagnostic there).
-  if (mlt && !ratio)
+  if (mlt && !ratio && !tikh_flux_mlt)
     throw std::runtime_error(
       "MixingLengthConvection (convection_type=mlt*) requires the ratio_ul temperature "
-      "correction (measured: the flux_divergence pairing does not converge; use dry/moist there)");
+      "correction (measured: the flux_divergence pairing does not converge; use dry/moist "
+      "there, or set CLIMA_TIKH>0 for the experimental regularised pairing)");
 
   // CLIMA_RATIO_LUCY: the FULL Unsoeld-Lucy correction, in the residual. What the corrector previously
   // called "UL" is only Lucy's rank-one uniform LEVEL shift, applied POST-solve -- which moves the profile
@@ -760,7 +835,211 @@ void ClimaRCECorrection::calcCorrection(
   const std::vector<double> ratio_w = (ratio || ptc) ? aux::trapezoidalWeights(ratio_wn) : std::vector<double>();
   const size_t ratio_nnu = ratio_wn.size();
   constexpr double ratio_si_to_cgs = 1e3;
-  auto ratioSums = [&](const std::vector<double>& T, const size_t i, double& num, double& den, double& C)
+
+  // ---- BAND-CLOSURE CORRECTION (2026-08-12). The sampled points miss the Doppler-narrow line
+  // cores that carry the Planck-mean emissivity aloft (measured: sampled den deficient by factors
+  // 6-17 at p <= 1e-3 bar, grid-dependent -- the "lottery" that made the local-RE row demand
+  // +100..400 K and blew up the high-resolution runs). opacity.band_correction[b][i] holds the
+  // per-band NATIVE line-opacity integral minus its sampled representation; that missing opacity
+  // exchanges with the BAND-MEAN radiation field:
+  //   num += dk_b * Jbar_b,   den += dk_b * B(nu_b, T),   C += dk_b * dB/dT(nu_b, T).
+  // Self-gating (dk -> 0 where sampling is complete, e.g. the troposphere at +-3%) and
+  // self-cancelling in LTE (deep down Jbar -> B, so num and den corrections cancel exactly where
+  // the sampled scheme was already right). 30 cm^-1 bands keep the kappa-B covariance error
+  // below ~1 K equivalent (measured against the direct native integral, T = 150..500 K).
+  // v1 SCOPE: thermally relevant bands only, x = hc nu/kT < 10 -- kappa B peaks at x ~ 3-6, so
+  // this keeps ~98% of the emissivity correction while excluding every band with meaningful
+  // STELLAR flux (diluted solar reaches parity with the local Planck function only at x >~ 10).
+  // That exclusion is essential: in a sunlit near-IR band the mean radiation field is
+  // window-dominated (the beam survives between the lines) while the true core J is
+  // thermalised, so the Jbar closure would inject spurious beam heating -- measured with a
+  // x < 25 cut as own_resid 85 at the DEEP levels (iteration 1), where the old scheme sat at
+  // 26. The SW num therefore stays sampled (benign status quo). The num-side Jbar term is NOT
+  // in the analytic Jacobian (MK stays sampled-only): an approximate Jacobian the NLEQ
+  // monotonicity test tolerates; the dominant den/C corrections DO enter through these sums.
+  // Kill switch: CLIMA_BANDCORR=0; cut override: CLIMA_BANDCORR_XCUT.
+  static const bool bandcorr_env = [] {
+    const char* e = std::getenv("CLIMA_BANDCORR");
+    return !(e != nullptr && std::string(e) == "0"); }();
+  static const double bandcorr_xcut = [] {
+    const char* e = std::getenv("CLIMA_BANDCORR_XCUT");
+    return (e != nullptr) ? std::atof(e) : 10.0; }();
+  const bool bandcorr = (ratio || ptc) && bandcorr_env && !opacity.band_correction.empty();
+  const size_t nb_cb = bandcorr ? opacity.band_correction.size() : 0;
+  std::vector<int> cb_of_k;
+  std::vector<double> cb_sumw;
+  std::vector<std::vector<double>> cb_Jbar;   // FROZEN band-mean radiation field [level][band]
+  std::vector<std::vector<double>> cb_eps;    // FROZEN core escape probability [level][band]
+  if (bandcorr)
+  {
+    constexpr double cb_width = SpectralGrid::correction_band_width;
+    cb_of_k.assign(ratio_nnu, -1);
+    cb_sumw.assign(nb_cb, 0.0);
+    for (size_t k = 0; k < ratio_nnu; ++k)
+    {
+      const size_t b = static_cast<size_t>(ratio_wn[k]/cb_width);
+      if (b < nb_cb) { cb_of_k[k] = static_cast<int>(b); cb_sumw[b] += ratio_w[k]; }
+    }
+  }
+  // ---- ESCAPE-PROBABILITY WEIGHT (v3, "three defects" note item 2). The missing cores'
+  // thermalisation state cannot be inferred from any weighting of the SAMPLED points (v2's
+  // kappa-weighted Jbar measured: inversion only partially restored, ~208 K vs the 255 K fd
+  // target, because the dk>=0 clamp confines the closure to exactly the bands whose cores were
+  // never sampled). It IS available from the native tables: the per-band PEAK opacity, stored at
+  // sampling time (SampledData::band_peaks), gives the core optical depth to SPACE above each
+  // level, tau_b,i = D * sum_{layers above} k_peak dz (D = 1.66 diffusivity). The closure is
+  // then scaled per band by eps = exp(-tau): algebraically identical to the cooling-to-space
+  // form Jbar_eff = (1-eps) B + eps Jbar (the (1-eps) B part cancels exactly between num and
+  // den), but with den/C scaled consistently so the Jacobian stays exact. eps -> 0 where the
+  // cores are thick to space: the closure self-cancels, the cancellation-protected IR-exchange
+  // balance (and the ozone inversion) survives. eps -> 1 at the thin SW-heated top: the full
+  // stabilising correction, exactly where the divergence disease lives. FROZEN per opacity
+  // refresh (k_peak and altitudes at the committed state), like every other closure input.
+  if (bandcorr && !opacity.band_peak_coeff.empty())
+  {
+    constexpr double diffusivity = 1.66;
+    cb_eps.assign(n, std::vector<double>(nb_cb, 1.0));
+    for (size_t b = 0; b < nb_cb; ++b)
+    {
+      double tau = 0.0;
+      cb_eps[n-1][b] = 1.0;
+      for (int i = static_cast<int>(n)-2; i >= 0; --i)
+      {
+        tau += diffusivity
+             * 0.5*(opacity.band_peak_coeff[b][i] + opacity.band_peak_coeff[b][i+1])
+             * std::abs(atmosphere.altitude[i+1] - atmosphere.altitude[i]);
+        cb_eps[i][b] = (tau < 700.0) ? std::exp(-tau) : 0.0;
+      }
+    }
+  }
+  // The closure's band-mean radiation field Jbar is FROZEN over the inner solve -- the same
+  // operator split as frozen opacity, one level up: with a live Jbar the closure's num term
+  // responds to every trial's radiation field while the analytic Jacobian (MK = sampled-J
+  // response only) knows nothing about it, and that inconsistency pinned the inner Newton at
+  // lambda_min (measured on the covering-20000 grid: same entry residual 130, lambda 1e-4 vs
+  // 0.1-0.8 uncorrected). Frozen, the closure is a CONSTANT during the solve -- its Jacobian is
+  // exactly zero and residual/Jacobian stay a consistent pair by construction; the snapshot is
+  // refreshed with the radiation field (below, before the final metric), so the lag vanishes at
+  // the fixed point exactly like the opacity lag.
+  //
+  // KAPPA-WEIGHTED band mean (v2, "three defects" note): Jbar_b = sum w kappa J / sum w kappa,
+  // not the flat mean. The missing cores share the thermalisation state of the band's STRONG
+  // sampled points: where those are optically thick the kappa-weighted J -> B(T_i) and the
+  // closure self-cancels per band (the cancellation-protected IR-exchange region -- ozone
+  // inversion -- survives, where the flat window-dominated mean injected artificial
+  // cooling-to-space and moved the 255 K stratopause to 170 K); at the SW-heated thin top the
+  // strong points are thin-to-space and the closure keeps its full stabilising effect. A side
+  // benefit: with Jbar ~ B in well-sampled bands the dk>=0 clamp inflates num and den EQUALLY,
+  // so the clamp's den bias (measured 1.7x at 1 mbar, covering-20000) becomes inert for the
+  // root. Bands whose sampling caught no line structure fall back to the flat mean -- the
+  // estimator degrades exactly where the deficit is largest, which bounds what v2 can fix
+  // (a genuine escape probability from per-band core statistics is the v3 completion).
+  auto snapshotBandJ = [&]() {
+    if (!bandcorr) return;
+    cb_Jbar.assign(n, std::vector<double>(nb_cb, 0.0));
+    for (size_t i = 0; i < n; ++i)
+    {
+      std::vector<double>& row = cb_Jbar[i];
+      std::vector<double> sum_wk(nb_cb, 0.0);   // sum w kappa per band (weight normalisation)
+      std::vector<double> sum_wj(nb_cb, 0.0);   // flat-mean fallback numerator
+      for (size_t k = 0; k < ratio_nnu; ++k)
+        if (cb_of_k[k] >= 0)
+        {
+          const int b = cb_of_k[k];
+          const double wk = ratio_w[k] * opacity.absorption_coeff[k][i];
+          row[b]    += wk * radiation_field.mean_intensity[i][k];
+          sum_wk[b] += wk;
+          sum_wj[b] += ratio_w[k] * radiation_field.mean_intensity[i][k];
+        }
+      for (size_t b = 0; b < nb_cb; ++b)
+      {
+        if (sum_wk[b] > 0.0)          row[b] /= sum_wk[b];
+        else if (cb_sumw[b] > 0.0)    row[b] = sum_wj[b] / cb_sumw[b];
+        else                          row[b] = 0.0;
+      }
+    }
+  };
+  snapshotBandJ();
+
+  // CLIMA_BANDDUMP: one-shot anatomy of the band closure at the entry profile -- per-level
+  // sampled vs correction contributions to num/den, plus the dominant bands at a deep level.
+  if (bandcorr && std::getenv("CLIMA_BANDDUMP"))
+  {
+    static bool band_dumped = false;
+    if (!band_dumped)
+    {
+      band_dumped = true;
+      const std::vector<double>& T = atmosphere.temperature;
+      std::fprintf(stderr, "  [banddump] lv P T | num_s dnum | den_s dden | gre_s gre_c\n");
+      for (size_t i : {0ul, 1ul, 2ul, 10ul, 30ul, 50ul, 70ul, 90ul, 96ul, 99ul})
+      {
+        if (i >= n) continue;
+        double num_s = 0.0, den_s = 0.0, dnum = 0.0, dden = 0.0;
+        std::vector<double> sumJ(nb_cb, 0.0);
+        for (size_t k = 0; k < ratio_nnu; ++k)
+        {
+          const double wk = ratio_w[k] * opacity.absorption_coeff[k][i];
+          num_s += wk * radiation_field.mean_intensity[i][k];
+          den_s += wk * disortpp::planckFunction2(ratio_wn[k], ratio_wn[k], T[i]) * ratio_si_to_cgs;
+          if (cb_of_k[k] >= 0) sumJ[cb_of_k[k]] += ratio_w[k] * radiation_field.mean_intensity[i][k];
+        }
+        double worst = 0.0; size_t worst_b = 0;
+        for (size_t b = 0; b < nb_cb; ++b)
+        {
+          const double dk = std::max(0.0, opacity.band_correction[b][i])
+                            * (cb_eps.empty() ? 1.0 : cb_eps[i][b]);
+          if (dk == 0.0 || cb_sumw[b] <= 0.0) continue;
+          const double nu_b = opacity.band_wavenumber[b];
+          if (1.4387769 * nu_b > bandcorr_xcut * std::max(T[i], 1.0)) continue;
+          const double dn = dk * cb_Jbar[i][b];
+          const double dd = dk * disortpp::planckFunction2(nu_b, nu_b, T[i]) * ratio_si_to_cgs;
+          dnum += dn; dden += dd;
+          if (std::abs(dn - dd) > worst) { worst = std::abs(dn - dd); worst_b = b; }
+        }
+        std::fprintf(stderr,
+          "  [banddump] %zu %.3e %.1f | %.4e %+.4e | %.4e %+.4e | %+.4e %+.4e  worst_band nu=%.0f dk=%.3e\n",
+          i, atmosphere.pressure[i], T[i], num_s, dnum, den_s, dden,
+          num_s/den_s - 1.0, (num_s + dnum)/(den_s + dden) - 1.0,
+          opacity.band_wavenumber[worst_b], opacity.band_correction[worst_b][i]);
+      }
+      // full-level pathology scan: corrected den or Planck slope C non-positive (a flipped
+      // restoring diagonal poisons the whole affine-covariant inner solve), or extreme gre
+      for (size_t i = 0; i < n; ++i)
+      {
+        double num_c = 0.0, den_c = 0.0, C_c = 0.0, den_s = 0.0, C_s = 0.0;
+        std::vector<double> sumJ(nb_cb, 0.0);
+        for (size_t k = 0; k < ratio_nnu; ++k)
+        {
+          const double wk = ratio_w[k] * opacity.absorption_coeff[k][i];
+          num_c += wk * radiation_field.mean_intensity[i][k];
+          den_c += wk * disortpp::planckFunction2(ratio_wn[k], ratio_wn[k], T[i]) * ratio_si_to_cgs;
+          C_c   += wk * disortpp::planckFunctionDeriv2(ratio_wn[k], ratio_wn[k], T[i]) * ratio_si_to_cgs;
+          if (cb_of_k[k] >= 0) sumJ[cb_of_k[k]] += ratio_w[k] * radiation_field.mean_intensity[i][k];
+        }
+        den_s = den_c; C_s = C_c;
+        for (size_t b = 0; b < nb_cb; ++b)
+        {
+          const double dk = std::max(0.0, opacity.band_correction[b][i])
+                            * (cb_eps.empty() ? 1.0 : cb_eps[i][b]);
+          if (dk == 0.0 || cb_sumw[b] <= 0.0) continue;
+          const double nu_b = opacity.band_wavenumber[b];
+          if (1.4387769 * nu_b > bandcorr_xcut * std::max(T[i], 1.0)) continue;
+          num_c += dk * cb_Jbar[i][b];
+          den_c += dk * disortpp::planckFunction2(nu_b, nu_b, T[i]) * ratio_si_to_cgs;
+          C_c   += dk * disortpp::planckFunctionDeriv2(nu_b, nu_b, T[i]) * ratio_si_to_cgs;
+        }
+        const double gre_c = (den_c > 0.0) ? num_c/den_c - 1.0 : -999.0;
+        if (den_c <= 0.0 || C_c <= 0.0 || std::abs(gre_c) > 5.0 || den_c < 0.2*den_s || C_c < 0.2*C_s)
+          std::fprintf(stderr,
+            "  [bandscan] PATHOLOGY lv %zu P=%.3e T=%.1f den_s=%.3e den_c=%.3e C_s=%.3e C_c=%.3e gre_c=%+.3e\n",
+            i, atmosphere.pressure[i], T[i], den_s, den_c, C_s, C_c, gre_c);
+      }
+      std::fprintf(stderr, "  [bandscan] scan complete\n");
+    }
+  }
+
+  auto ratioSums = [&](const std::vector<double>& T, const size_t i, double& num, double& den, double& C,
+                       double* num_sampled = nullptr)
   {
     num = den = C = 0.0;
     for (size_t k = 0; k < ratio_nnu; ++k)
@@ -771,6 +1050,32 @@ void ClimaRCECorrection::calcCorrection(
       den += wk * disortpp::planckFunction2(wn, wn, T[i])      * ratio_si_to_cgs;
       C   += wk * disortpp::planckFunctionDeriv2(wn, wn, T[i]) * ratio_si_to_cgs;
     }
+    if (num_sampled != nullptr) *num_sampled = num;
+    if (bandcorr)
+      for (size_t b = 0; b < nb_cb; ++b)
+      {
+        // dk CLAMPED to >= 0 (v1, OPT-IN): only MISSING opacity is closed. Negative dk (sampled
+        // overcounting) is benign by num/den cancellation, and fed into the closure it becomes an
+        // ANTI-restoring den/C term that drove a row diagonal through zero (+407 K Newton
+        // component @lv55, trial residuals 1e74, covering-20000). A signed residual with a
+        // dk>0-only C (dominant-Jacobian pattern) was ALSO tried: it pins lambda at the floor on
+        // the covering grid -- some levels' signed correction is genuinely anti-restoring.
+        // KNOWN v1 LIMITATION (why this is opt-in): the flat band-mean Jbar is window-dominated,
+        // but the missing CORES are thick-to-space through most of the stratosphere and should
+        // see ~B_local -- the closure therefore over-cools the IR-exchange region (measured:
+        // the cancellation-protected ~255 K at 1 mbar moves to ~170 K on both test grids). The
+        // closure is honest only where cores are thin-to-space (the SW-heated top -- exactly
+        // where the divergence disease lives). v2 needs an escape-probability-weighted Jbar,
+        // Jbar_eff = (1-eps)B + eps*Jbar_flat (cooling-to-space closure).
+        const double dk = std::max(0.0, opacity.band_correction[b][i])
+                          * (cb_eps.empty() ? 1.0 : cb_eps[i][b]);   // escape-probability weight (v3)
+        if (dk == 0.0 || cb_sumw[b] <= 0.0) continue;
+        const double nu_b = opacity.band_wavenumber[b];
+        if (1.4387769 * nu_b > bandcorr_xcut * std::max(T[i], 1.0)) continue;   // thermal bands only (v1)
+        num += dk * cb_Jbar[i][b];                   // FROZEN band-mean J (see snapshotBandJ)
+        den += dk * disortpp::planckFunction2(nu_b, nu_b, T[i])      * ratio_si_to_cgs;
+        C   += dk * disortpp::planckFunctionDeriv2(nu_b, nu_b, T[i]) * ratio_si_to_cgs;
+      }
   };
 
   // cumulative flux proxy cumF_i = int_0^i (num-den) dz (trapezoidal in altitude from the surface i=0):
@@ -907,6 +1212,12 @@ void ClimaRCECorrection::calcCorrection(
       double max_x0 = 0.0;
       for (size_t li = 0; li + 1 < n; ++li)
       {
+        // links above the flux ceiling carry no convective flux (mlt_pmin, mirrored from the
+        // mlt_C construction below) -- they must not vote here either. A converged terrestrial
+        // profile is legitimately super-adiabatic above the ceiling (measured x ~ 0.6 at the
+        // steep upper-stratosphere lapse), and counting those links forced the slow homotopy
+        // ramp on every warm restart from a converged profile.
+        if (atmosphere.pressure[li+1] < convection->fluxMinPressure()) continue;
         const double dlnP = std::log(atmosphere.pressure[li] / atmosphere.pressure[li+1]);
         if (dlnP <= 0.0) continue;
         const double x = std::log(atmosphere.temperature[li]/atmosphere.temperature[li+1]) / dlnP
@@ -1072,7 +1383,10 @@ void ClimaRCECorrection::calcCorrection(
         // mode already does) so the solver drives what the metric measures. CLIMA_ZONE_CEFF restores the
         // old weighting.
         const bool zone_fluxnorm = (netflux || ratio);
-        g[r] = (F[z.upper] - f_lower) / (zone_fluxnorm ? Fnorm : ceff_zone[zi]);
+        // MLT deep block (Fix A): the conserved quantity crossing the block top is the TOTAL
+        // flux F_rad + F_c (the boundary link is MLT-active), so the budget row carries it.
+        const double fc_top = (mlt && z.upper + 1 < n) ? mltLink(T, z.upper) : 0.0;
+        g[r] = (F[z.upper] + fc_top - f_lower) / (zone_fluxnorm ? Fnorm : ceff_zone[zi]);
       }
       else if (i == 0)                               // bottom DOF: F_net[0] -> F_star (0 = terrestrial
         // MLT: the surface loses F_c through the lowest link (sensible heat drawn into the
@@ -1260,7 +1574,8 @@ void ClimaRCECorrection::calcCorrection(
       double ratio_inv = 0.0, ratio_diag_corr = 0.0, planck_slope = 0.0;
       if (((ratio && i != 0) || ptc) && zi < 0)
       {
-        double num, den, C; ratioSums(atmosphere.temperature, i, num, den, C);
+        double num, den, C;
+        ratioSums(atmosphere.temperature, i, num, den, C);
         ratio_inv = (den > 0.0) ? 1.0/den : 0.0;
         // MLT: the residual numerator is (num + q), so the den-derivative term carries it too
         const double q_committed = mlt ? mltQ(atmosphere.temperature, i) : 0.0;
@@ -1269,6 +1584,9 @@ void ClimaRCECorrection::calcCorrection(
         // kappa->0, unlike num*C/den^2). This is the doc's -C_i/den_i; used by the Eq.19 blend instead of
         // the unstable exact ratio Jacobian terms (which carry 1/den, 1/den^2 and blow up at the thin top).
         planck_slope = (den > 0.0) ? C / den : 0.0;
+        // (band closure: with the FROZEN band-mean Jbar the closure's num term is a constant
+        //  during the inner solve, so MK -- the sampled-J response -- IS the exact num Jacobian;
+        //  den/C corrections enter through the sums above. No extra terms needed.)
       }
       const double rd = (zi < 0) ? ross_d[i] : 0.0;       // Rosseland deep-preconditioner weight (0 = pure NFJ)
       for (size_t l = 0; l < n; ++l)
@@ -1321,6 +1639,17 @@ void ClimaRCECorrection::calcCorrection(
       {
         row[0] += mj_dlo[0] / ceff[0];
         row[1] += mj_dhi[0] / ceff[0];
+      }
+      if (mlt && zi >= 0)                           // MLT deep block: d F_c(top link)/dT (Fix A)
+      {
+        const Zone& z = zones[zi];
+        if (z.upper + 1 < n)
+        {
+          const bool zfn = (netflux || ratio);
+          const double s = 1.0 / (zfn ? Fnorm : ceff_zone[zi]);
+          row[z.upper]   += s * mj_dlo[z.upper];
+          row[z.upper+1] += s * mj_dhi[z.upper];
+        }
       }
       // (skip for the RCB-handover level: its row is the flux difference, not the ratio form, so the
       //  ratio Planck-cooling diagonal must not be added on top of it)
@@ -1400,6 +1729,7 @@ void ClimaRCECorrection::calcCorrection(
   // zero step show a spurious residual increase -> every step rejected -> the dogleg stalls.
   std::vector<double> gbase;
   evalG(x, /*want_jac=*/true, gbase);
+  snapshotBandJ();   // freeze the closure's Jbar at the snapped-base radiation field
   rebuildJ();
   const bool dbg = std::getenv("CLIMA_DBG") != nullptr;
   (void) dnorm;
@@ -1470,7 +1800,7 @@ void ClimaRCECorrection::calcCorrection(
   // residual's pole), so the convex-Wien-tail overshoot that blew up stock hybrj cannot occur. Same scheme
   // already proven on the flux residual; here the matrix is the strictly diagonally-dominant ratio Jacobian
   // so NO Laplacian regularisation is needed (the near-null flux-divergence J required it; this one does not).
-  if (ratio || newtonlike)
+  if (ratio || newtonlike || tikh_flux_mlt)
   {
     // NLEQ-ERR (Deuflhard) affine-covariant damped Newton -- used both for the pure ratio residual and for
     // the Newton-like flux-conservation mode (accurate flux divergence residual + dominant NHJ step Jacobian).
@@ -1486,19 +1816,121 @@ void ClimaRCECorrection::calcCorrection(
     };
     auto allFinite = [&](const std::vector<double>& v) { for (double e : v) if (!std::isfinite(e)) return false; return true; };
 
+    // ---- CLIMA_TIKH=alpha (test A2, "three defects" note): Tikhonov regularisation IN THE
+    // OBJECTIVE, min ||g||^2 + alpha^2 ||D4 T||^2, D4 the UNCONDITIONAL fourth difference of the
+    // full profile (no Delta-tau gate, no junction guard -- both killed the earlier
+    // CLIMA_THICK_SMOOTH attempt; unconditional is viable now because the MLT C1 handover left
+    // no corner for a smoothness term to fight). Rationale: in the Delta-tau >> 1 band the
+    // Nyquist mode is a NULL direction of the collocated residual (degenerate root family,
+    // path-dependent member selection); D4 responds with 16 at Nyquist and (k Delta)^4 -> 0 on
+    // resolved modes, so any alpha inside the wide singular-value gap pins the grid-scale mode
+    // while perturbing the physics by O(alpha^2) -- the alpha-plateau is the validation test.
+    // IN the objective, so the g=0 root family is intersected rather than shifted, and NOT
+    // post-hoc, so the committed profile is a stationary point of the system actually solved.
+    // The step becomes the Gauss--Newton correction of the augmented least-squares system,
+    //   (J^T J + a^2 S^T S) dx = -(J^T g + a^2 S^T S x),
+    // with S = D4 folded onto the reduced DOFs (slaved levels are LINEAR in their anchor via
+    // Cfac, so S is a constant matrix per call and S*T_full = S_red*x exactly).
+    const bool tikh = tikh_alpha > 0.0;
+    const double tikh_a2 = tikh_alpha*tikh_alpha;
+    size_t n_pen = 0;
+    std::vector<double> S_pen;                       // n_pen x m, row-major
+    if (tikh && n >= 5)
+    {
+      n_pen = n - 4;
+      S_pen.assign(n_pen*m, 0.0);
+      auto fold = [&](size_t row, size_t l, double w) {
+        if (l >= n) return;
+        if (slaved[l]) { const int c = col_of_level[anchor[l]]; if (c >= 0) S_pen[row*m+c] += w*Cfac[l]; }
+        else           { const int c = col_of_level[l];         if (c >= 0) S_pen[row*m+c] += w; }
+      };
+      for (size_t i = 2; i+2 < n; ++i)
+      {
+        const size_t row = i - 2;
+        fold(row, i-2,  1.0); fold(row, i-1, -4.0); fold(row, i,  6.0);
+        fold(row, i+1, -4.0); fold(row, i+2,  1.0);
+      }
+    }
+    // augmented Gauss-Newton correction at (xv, gv); returns false on a singular system
+    auto tikhStep = [&](const std::vector<double>& gv, const std::vector<double>& xv,
+                        std::vector<double>& dxout) -> bool {
+      std::vector<double> A(m*m, 0.0), b(m, 0.0);
+      for (size_t k = 0; k < m; ++k)
+        for (size_t r = 0; r < m; ++r)
+        {
+          const double Jkr = J[k*m+r];
+          if (Jkr == 0.0) continue;
+          for (size_t c = 0; c < m; ++c) A[r*m+c] += Jkr * J[k*m+c];
+          b[r] -= Jkr * gv[k];
+        }
+      std::vector<double> Sx(n_pen, 0.0);
+      for (size_t p = 0; p < n_pen; ++p)
+        for (size_t c = 0; c < m; ++c) Sx[p] += S_pen[p*m+c]*xv[c];
+      for (size_t p = 0; p < n_pen; ++p)
+        for (size_t r = 0; r < m; ++r)
+        {
+          const double Spr = S_pen[p*m+r];
+          if (Spr == 0.0) continue;
+          for (size_t c = 0; c < m; ++c) A[r*m+c] += tikh_a2 * Spr * S_pen[p*m+c];
+          b[r] -= tikh_a2 * Spr * Sx[p];
+        }
+      if (!solveDenseLU(A, b, m)) return false;
+      dxout = b;
+      return true;
+    };
+    // augmented objective norm ||g||^2 + a^2 ||S x||^2 (floor test)
+    auto augNorm2 = [&](const std::vector<double>& gv, const std::vector<double>& xv) {
+      double s = 0.0;
+      for (size_t r = 0; r < m; ++r) s += gv[r]*gv[r];
+      if (tikh)
+        for (size_t p = 0; p < n_pen; ++p)
+        {
+          double sx = 0.0;
+          for (size_t c = 0; c < m; ++c) sx += S_pen[p*m+c]*xv[c];
+          s += tikh_a2*sx*sx;
+        }
+      return s;
+    };
+
     std::vector<double> g;
     double lambda = 1.0;
     int it = 0;
     for (; it < maxit; ++it)
     {
-      evalG(x, /*want_jac=*/true, g);   // residual + analytic ratio Jacobian at the current point
+      // an RT failure at the current iterate (e.g. a trial-driven exotic profile making the
+      // backend's thermal-emission floor trip) ends the inner solve at the last good state
+      // rather than killing the process
+      try { evalG(x, /*want_jac=*/true, g); }
+      catch (const std::exception& e)
+      { if (dbg) std::fprintf(stderr, "  [nleq] base eval failed (%s) -- keeping iterate\n", e.what());
+        break; }
       rebuildJ();
 
-      std::vector<double> A = J, b(m);          // ordinary Newton correction  J dx = -g
-      for (size_t r = 0; r < m; ++r) b[r] = -g[r];
-      if (!solveDenseLU(A, b, m)) break;        // singular (should not happen: J is diagonally dominant)
-      const std::vector<double> dx = b;
+      std::vector<double> dx_v;
+      if (tikh)
+      {
+        if (!tikhStep(g, x, dx_v)) break;       // augmented Gauss-Newton correction
+      }
+      else
+      {
+        std::vector<double> A = J, b(m);        // ordinary Newton correction  J dx = -g
+        for (size_t r = 0; r < m; ++r) b[r] = -g[r];
+        if (!solveDenseLU(A, b, m)) break;      // singular (should not happen: J is diagonally dominant)
+        dx_v = b;
+      }
+      const std::vector<double> dx = dx_v;
       const double norm_dx = scaledNorm(dx, x);
+      if (dbg && it < 3)
+      {
+        size_t rmax = 0; double vmax = 0.0, gmax = 0.0; size_t rg = 0;
+        for (size_t r = 0; r < m; ++r)
+        {
+          if (std::abs(dx[r]) > vmax) { vmax = std::abs(dx[r]); rmax = r; }
+          if (std::abs(g[r])  > gmax) { gmax = std::abs(g[r]);  rg = r; }
+        }
+        std::fprintf(stderr, "  [nleq-it] it=%d norm_dx=%.3e max|dx|=%.3e @lv%zu (x=%.1f)  max|g|=%.3e @lv%zu\n",
+                     it, norm_dx, vmax, unk[rmax], x[rmax], gmax, unk[rg]);
+      }
       if (norm_dx < xtol)                       // converged in the Newton correction
       {
         // COMMIT the final correction before declaring convergence (Deuflhard's termination:
@@ -1518,16 +1950,49 @@ void ClimaRCECorrection::calcCorrection(
       {
         std::vector<double> xt(m);
         for (size_t r = 0; r < m; ++r) xt[r] = std::max(1.0, x[r] + lam*dx[r]);
-        std::vector<double> gt; evalG(xt, /*want_jac=*/false, gt);
+        std::vector<double> gt;
+        bool trial_ok = true;
+        try { evalG(xt, /*want_jac=*/false, gt); }
+        catch (const std::exception&) { trial_ok = false; }   // crashing trial = inadmissible step
         double theta = 1e300;
-        if (allFinite(gt))
+        if (trial_ok && allFinite(gt))
         {
-          std::vector<double> A2 = J, b2(m);
-          for (size_t r = 0; r < m; ++r) b2[r] = -gt[r];
-          if (solveDenseLU(A2, b2, m) && allFinite(b2)) theta = scaledNorm(b2, xt) / norm_dx;
+          std::vector<double> b2;
+          if (tikh)
+          {
+            if (tikhStep(gt, xt, b2) && allFinite(b2)) theta = scaledNorm(b2, xt) / norm_dx;
+          }
+          else
+          {
+            std::vector<double> A2 = J; b2.assign(m, 0.0);
+            for (size_t r = 0; r < m; ++r) b2[r] = -gt[r];
+            if (solveDenseLU(A2, b2, m) && allFinite(b2)) theta = scaledNorm(b2, xt) / norm_dx;
+          }
         }
+        if (dbg && it < 3)
+          std::fprintf(stderr, "  [nleq-trial] it=%d lam=%.3e theta=%.3e\n", it, lam, theta);
         if (theta <= 1.0 - 0.25*lam) { lam_acc = lam; x_acc = xt; break; }   // natural monotonicity test
-        if (lam <= lambda_min)       { lam_acc = lam; x_acc = xt; break; }   // regularity floor: take the small step
+        // regularity floor: the smallest step is taken ONLY if it decreases the RESIDUAL NORM.
+        // Unconditionally committing the floor step turned an unsatisfiable row into a runaway:
+        // 50 floor-steps per call with the residual GROWING (||g|| 6.6 -> 14) accumulated a
+        // +827 K displacement (measured, Earth 30000-pt grid, iteration 4) instead of stalling
+        // loudly at the base profile. The test is on ||g|| rather than theta: theta compares
+        // affine-covariant correction norms through the (possibly approximate) Jacobian and can
+        // exceed 1 on genuinely productive steps -- a theta gate here blocked the early deep
+        // Unsoeld-Lucy transient that the floor steps legitimately work through (measured: the
+        // R=5000 run stalled at own_resid ~21 instead of passing 26 -> 6.6). A residual-norm
+        // decrease is always safe progress; without one the inner solve terminates, keeps the
+        // current iterate, and reports the elevated residual honestly.
+        if (lam <= lambda_min)
+        {
+          if (trial_ok && allFinite(gt))
+          {
+            // with CLIMA_TIKH the objective norm includes the penalty term
+            const double n0 = augNorm2(g, x), n1 = augNorm2(gt, xt);
+            if (n1 <= n0) { lam_acc = lam; x_acc = xt; }
+          }
+          break;
+        }
         lam = std::max(0.5*lam, lambda_min);                                 // reject -> halve the damping
       }
       if (lam_acc <= 0.0) break;                // no admissible step
@@ -1654,6 +2119,7 @@ void ClimaRCECorrection::calcCorrection(
 
   std::vector<double> Ffin, NHfin;
   forward_eval_full_(T_final, /*recompute_opacity=*/true, /*compute_jacobian=*/false, Ffin, NHfin);
+  snapshotBandJ();   // refresh the closure's Jbar with the committed radiation field (metric below)
 
   // how much this inner solve moved the profile -> gates the mask re-detection on the NEXT call
   double inner_change = 0.0;
@@ -1681,6 +2147,8 @@ void ClimaRCECorrection::calcCorrection(
     for (size_t li = 0; li + 1 < n; ++li)
       if (mltLink(T_final, li) > 0.0)
       { atmosphere.convective[li] = 1; atmosphere.convective[li+1] = 1; }
+    for (size_t i = 0; i < n; ++i)               // Fix A: the slaved deep block is convective
+      if (prev_mask_[i]) atmosphere.convective[i] = 1;
   }
 
   // ---- convergence metric (clima form, multi-stream-honest tolerance + a settled gate). PRIMARY = the
@@ -1703,7 +2171,8 @@ void ClimaRCECorrection::calcCorrection(
     const int zi = zone_of_dof[i];
     double res;
     // same bottom-boundary convention as assembleG: at the domain bottom the inflow is F_star
-    if (zi >= 0) { const Zone& z = zones[zi]; const double low = (z.lower==0)?target_flux:Ffin[z.lower-1]; res = Ffin[z.upper]-low; }
+    if (zi >= 0) { const Zone& z = zones[zi]; const double low = (z.lower==0)?target_flux:Ffin[z.lower-1];
+                   res = Ffin[z.upper] + ((mlt && z.upper+1 < n) ? mltLink(T_final, z.upper) : 0.0) - low; }
     // MLT: conservation is a statement about the TOTAL flux F_rad + F_c (in a convective zone the
     // radiative flux alone is legitimately non-constant). Matches the assembleG rows.
     else if (i == 0) res = Ffin[0] + (mlt ? mltFcLvl(T_final, 0) : 0.0) - target_flux;
@@ -1767,7 +2236,20 @@ void ClimaRCECorrection::calcCorrection(
   // above the driver threshold while convection is still weakened (a converged solution at
   // sf < 1 is not a solution of the full problem).
   mlt_prev_resid_ = own_resid;
-  last_residual_ = mask_big_change ? 1.0 : std::max(own_resid, inner_change);
+  // CLIMA_TIKH mode-aware gate: the scheme drives the AUGMENTED objective, whose stationary
+  // point retains an O(alpha) compromise in max|g| by design (measured: floors at 2.5e-3 for
+  // alpha=1e-3 with the profile dead stationary, dT/T ~ 1e-14, for 80 wasted iterations).
+  // own_resid stays reported as the honest physical error bar; convergence is judged on
+  // stationarity (inner_change), which is creep-proof through the outer opacity refresh.
+  // Tikhonov gate amended: stationarity ALONE endorsed a Wien cold trap (flux+MLT+Tikh BD:
+  // every step rejected at a grossly wrong state -> inner_change = 0 -> "converged" at
+  // T_bot 549 K radiating 0.05% of F_int). Stationarity must be paired with a LOOSE sanity
+  // ceiling on the physical residual: generous enough for the O(alpha) penalty floor
+  // (~2.5e-3 measured), tight enough that a saturated flux residual (|g| -> 1 in the trap)
+  // can never pass.
+  last_residual_ = mask_big_change ? 1.0
+    : (tikh_alpha > 0.0 ? std::max(inner_change, (own_resid < 0.05 ? 0.0 : own_resid))
+                        : std::max(own_resid, inner_change));
   if (mlt && mlt_sf_ < 1.0) last_residual_ = std::max(last_residual_, 0.5);
 }
 

@@ -29,20 +29,20 @@ species_folders = [s[1] for s in opacity_species]
 
 # --- Build the model ---
 
-grid = pyngam.SpectralGrid(
-    opacity_data_path, "",
-    2, 5000.0,
-    0.15, 100.0)
-
 # grid = pyngam.SpectralGrid(
 #     opacity_data_path, "",
-#     3, 0.0,                  # mode 3 (covering); spectral_resolution unused
-#     0.15, 100.0,              # wavelength_min/max [µm]
-#     100.0, 350.0,           # covering T range: set max ≈ deepest layer T
-#     30,                       # cov_nb_temperatures: 0 → default ~500 K steps
-#     40000,                    # target number of points
-#     5772.0,                  # host-star T; 0.0 for a brown dwarf
-#     40000)                   # target_nb_points_stellar  (stellar)
+#     2, 1000.0,
+#     0.15, 100.0)
+
+grid = pyngam.SpectralGrid(
+    opacity_data_path, "",
+    3, 0.0,                  # mode 3 (covering); spectral_resolution unused
+    0.15, 100.0,              # wavelength_min/max [µm]
+    100.0, 350.0,           # covering T range: set max ≈ deepest layer T
+    30,                       # cov_nb_temperatures: 0 → default ~500 K steps
+    40000,                    # target number of points
+    5772.0,                  # host-star T; 0.0 for a brown dwarf
+    40000)                   # target_nb_points_stellar  (stellar)
 
 # Chemistry: isoprofile with prescribed mixing ratios.
 # The chemistry_parameters vector contains the volume mixing ratios
@@ -85,11 +85,13 @@ model = pyngam.TerrestrialPlanet(
     stellar_type="tabulated",
     stellar_params=["data/stellar_spectra/spectrum_sun.dat"],   # stellar temperature in K (Sun)
     instellation=1361e3*0.5,     # erg/cm^2/s (solar constant: 1361 W/m^2 * 1e3, 0.5 for fast rotator)
-    surface_type="variable_albedo",       # variable: albedo from file
-    surface_params=["data/Earth/earth_spectral_surface_reflection.dat"],  #albedo file
+    #surface_type="variable_albedo",       # variable: albedo from file
+    #surface_params=["data/Earth/earth_spectral_surface_reflection.dat"], 
+    surface_type="simple",       # variable: albedo from file
+    surface_params=["0.3", "2.0"],  #albedo file
     chemistry_parameters=mix_ratios,
     max_iterations=200,
-    temperature_correction="flux_divergence",
+    temperature_correction="ratio_ul",
     convergence_threshold=1e-5,
     iteration_gamma=0.2,
     lre_fraction=0.1,
@@ -213,7 +215,7 @@ print(f"Net flux at bottom: {flux_total[0]:.4e} erg/cm2/s")
 
 # --- Save ---
 
-save_model("output_terrestrial.nc", model, grid, config={
+save_model("output_earth.nc", model, grid, config={
     "surface_gravity": 980.0,
     "surface_albedo": 0.3,
     "stellar_temperature": 5780.0,

@@ -152,6 +152,15 @@ void LinearisedTemperatureCorrection::calcCorrection(
   const bool trust = surface_anchored && std::getenv("LIN_TRUST") != nullptr;
   trust_active_ = trust;
 
+  // CLIMA_TIKH active? Read at function scope: the zone-nucleation gate below must not use a
+  // FOREIGN metric -- under the Tikhonov objective the flux residual has an irreducible
+  // O(alpha) floor by construction (measured 1.44e-3 at alpha=1e-3, permanently above the
+  // 1e-3 gate), so gating nucleation on it asks for convergence in a currency the active
+  // scheme cannot pay. Gate on settle alone in that mode.
+  static const bool tikh_on = [] {
+    const char* e = std::getenv("CLIMA_TIKH");
+    return e != nullptr && std::atof(e) > 0.0; }();
+
   // experiment (env LIN_PERLEVEL): solve the surface-anchored case with the SAME scheme the
   // self-luminous (brown dwarf) path uses -- the PER-LEVEL net-flux residual + inner Newton with a
   // backtracking line search on the linear model -- instead of the bespoke divergence/NLEQ-ERR path.
@@ -225,9 +234,19 @@ void LinearisedTemperatureCorrection::calcCorrection(
   // (and a transient hot deep can't lock in). A surface-driven troposphere (terrestrial) can never
   // reach radiative flux balance -- the would-be convective layers keep a finite radiative
   // imbalance -- so there we grow on settle alone (PTC removes the checkerboard, so settle is safe).
+  // Tikhonov translation of the self-luminous "flux converged" requirement: the residual can
+  // never pass the absolute threshold (O(alpha) floor), but it PLATEAUS there once the present
+  // zone's radiative solve is done -- gate growth on that plateau (stationary to 5% across
+  // outer iterations). Settle alone is NOT enough: a merely-settled transient is still
+  // super-adiabatic above the true RCB and the grow-only scan then ratchets the top upward
+  // without limit (measured after the first, settle-only version of this gate).
+  const bool tikh_flux_plateau = tikh_on
+    && last_flux_residual_ >= 0.0 && tikh_gate_resid_prev_ > 0.0
+    && std::abs(last_flux_residual_ - tikh_gate_resid_prev_) < 0.05 * last_flux_residual_;
+  tikh_gate_resid_prev_ = last_flux_residual_;
   const bool may_grow = convection != nullptr && use_flux && !trust
     && last_max_dt_frac_ < grow_tol
-    && (surface_anchored
+    && (surface_anchored || tikh_flux_plateau
         || (last_flux_residual_ >= 0.0 && last_flux_residual_ < flux_grow_tol));
   if (may_grow)
   {
@@ -248,7 +267,7 @@ void LinearisedTemperatureCorrection::calcCorrection(
     // boundary-motion limiter (clima): grow the boundary by at most max_shift layers per settle, so
     // the convective perturbation stays small and the PTC step can damp it.
     constexpr int max_shift = 2;
-    if (surface_anchored && top > rcb_ + max_shift) top = rcb_ + max_shift;
+    if ((surface_anchored || tikh_on) && top > rcb_ + max_shift) top = rcb_ + max_shift;
     if (top > rcb_)
     {
       rcb_ = top;
@@ -256,6 +275,30 @@ void LinearisedTemperatureCorrection::calcCorrection(
       // re-damp the PTC step after the zone moved: a fresh small dt absorbs the boundary
       // perturbation before dt grows back towards the Newton step.
       if (surface_anchored) ptc_dt_ = -1.0;
+    }
+    // Tikhonov-mode ANTI-OVERSHOOT RETREAT (ported from the ratio-path boundary controller;
+    // this grow-only controller historically never needed one because the converged-flux gate
+    // stopped growth at the true boundary). Under the penalty objective the smoothed radiative
+    // profile reads marginally super-adiabatic through a wider band, the staircase overshoots,
+    // and the signature is a strong COLD INVERSION on the first radiative link above the
+    // anchor (measured: nabla = -0.32 at the runaway's end, zone 36 levels vs the true 10).
+    // At the same plateaued states the grow scan reads, retreat one level; grow and retreat
+    // read the same links at converged states, so at most one fires per settle.
+    else if (tikh_flux_plateau && rcb_ >= 1 && rcb_ + 2 < static_cast<int>(n))
+    {
+      const size_t a = rcb_ + 1;   // the anchor (first radiative level above the zone)
+      const double dlnP = std::log(atmosphere.pressure[a] / atmosphere.pressure[a+1]);
+      if (dlnP > 0.0)
+      {
+        const double nab = std::log(
+          atmosphere.temperature[a] / atmosphere.temperature[a+1]) / dlnP;
+        const double nad = nablaAd(a, a+1);
+        if (nad > 0.0 && nab < -0.2*nad)
+        {
+          rcb_ -= 1;
+          zones_grew_ = true;
+        }
+      }
     }
   }
 
@@ -928,6 +971,53 @@ void LinearisedTemperatureCorrection::calcCorrection(
       // Iterate the reduced flux Newton to convergence (cheap -- no DISORT re-solve) with a
       // backtracking line search; the smoothing vanishes at the inner fixed point -> a smooth,
       // unbiased F_lin = F_int, so the outer DISORT iterations run at the true Newton rate.
+      //
+      // CLIMA_TIKH=alpha (test A1 on the flux-residual family): Tikhonov 4th-difference
+      // regularisation IN THE OBJECTIVE, min 0.5||g_lin||^2 + 0.5 alpha^2 ||D4 T||^2. The
+      // net-flux kernel's odd-moment symmetry makes the Nyquist mode a near-null direction of
+      // this residual, so the converged root carries the grid-scale sawtooth; D4 responds with
+      // 16 at Nyquist and (k Delta)^4 -> 0 on resolved modes, so any alpha inside the wide
+      // singular-value gap pins the sawtooth while leaving the physics untouched (and the
+      // sawtooth is flux-neutral, so removing it costs nothing in conservation). With alpha > 0
+      // the step becomes the Gauss--Newton correction of the augmented objective and the line
+      // search descends the augmented f; alpha = 0 is the unchanged original path. Slaved
+      // levels fold linearly into their anchors, local-RE skin levels enter the stencil as
+      // constants.
+      static const double lin_tikh_alpha = [] {
+        const char* e = std::getenv("CLIMA_TIKH");
+        return (e != nullptr) ? std::atof(e) : 0.0; }();
+      const bool lin_tikh = lin_tikh_alpha > 0.0 && n >= 5;
+      const double lin_tikh_a2 = lin_tikh_alpha*lin_tikh_alpha;
+      const size_t n_pen = lin_tikh ? n - 4 : 0;
+      std::vector<double> S_pen;                     // n_pen x m: d(D4 T)_row / d T_unk
+      std::vector<char> pen_active;                  // stencil fully radiative (guard, see below)
+      if (lin_tikh)
+      {
+        S_pen.assign(n_pen*m, 0.0);
+        pen_active.assign(n_pen, 1);
+        // GUARD: penalty rows only where the FULL stencil is free radiative. The unconditional
+        // penalty is viable only with a C1 radiative-convective handover (MLT); this path is
+        // locked to the adjustment schemes, whose RCB corner is REAL physics -- unguarded, D4
+        // fights the corner until the convective zone collapses (measured: BD deep went
+        // all-radiative, T_bot +560 K, with the sawtooth removed but the physics destroyed).
+        // Unlike the old terrestrial thick-smooth failure, the BD radiative band is wide, so the
+        // guard leaves substantial interior coverage where the sawtooth actually lives.
+        for (size_t i=2; i+2<n; ++i)
+        {
+          const size_t row = i-2;
+          for (size_t l=i-2; l<=i+2; ++l)
+            if (slaved(l)) { pen_active[row] = 0; break; }
+          if (!pen_active[row]) continue;
+          auto fold = [&](size_t l, double w) {
+            for (size_t c=0; c<m; ++c) if (unk[c] == l) { S_pen[row*m+c] += w; break; }
+          };
+          fold(i-2, 1.0); fold(i-1, -4.0); fold(i, 6.0); fold(i+1, -4.0); fold(i+2, 1.0);
+        }
+      }
+      auto penRow = [&](const std::vector<double>& T, size_t row)->double {
+        const size_t i = row + 2;
+        return T[i-2] - 4.0*T[i-1] + 6.0*T[i] - 4.0*T[i+1] + T[i+2];
+      };
       auto linResid = [&](const std::vector<double>& T)->double
       {
         double f = 0.0;
@@ -940,6 +1030,10 @@ void LinearisedTemperatureCorrection::calcCorrection(
           const double g = (Flin - target_flux) / fscale;
           f += g * g;
         }
+        if (lin_tikh)
+          for (size_t row=0; row<n_pen; ++row)
+          { if (!pen_active[row]) continue;
+            const double p = penRow(T, row); f += lin_tikh_a2 * p * p; }
         return 0.5 * f;
       };
       std::vector<double> dunk(m), Asolve(m*m), Ttrial(n);
@@ -947,16 +1041,49 @@ void LinearisedTemperatureCorrection::calcCorrection(
       for (int inner=0; inner<max_inner; ++inner)
       {
         const double f_old = linResid(T_work);
+        std::vector<double> gres(m);
         for (size_t r=0; r<m; ++r)
         {
           const size_t i = unk[r];
           double Flin = radiation_field.flux_total[i];
           for (size_t j=0; j<n; ++j)
             Flin += radiation_field.net_flux_jacobian[i][j] * (T_work[j] - T_curr[j]);
-          dunk[r] = -(Flin - target_flux) / fscale;
+          gres[r] = (Flin - target_flux) / fscale;
+          dunk[r] = -gres[r];
         }
+        if (lin_tikh)
+        {
+          // Gauss--Newton normal equations of the augmented objective:
+          //   (A^T A + a^2 S^T S) d = -(A^T g + a^2 S^T p)
+          std::vector<double> N(m*m, 0.0), b(m, 0.0);
+          for (size_t k=0; k<m; ++k)
+            for (size_t r=0; r<m; ++r)
+            {
+              const double Akr = A[k*m+r];
+              if (Akr == 0.0) continue;
+              for (size_t c=0; c<m; ++c) N[r*m+c] += Akr * A[k*m+c];
+              b[r] -= Akr * gres[k];
+            }
+          for (size_t row=0; row<n_pen; ++row)
+          {
+            if (!pen_active[row]) continue;
+            const double p = penRow(T_work, row);
+            for (size_t r=0; r<m; ++r)
+            {
+              const double Spr = S_pen[row*m+r];
+              if (Spr == 0.0) continue;
+              for (size_t c=0; c<m; ++c) N[r*m+c] += lin_tikh_a2 * Spr * S_pen[row*m+c];
+              b[r] -= lin_tikh_a2 * Spr * p;
+            }
+          }
+          if (!solveDense(N, b, m)) break;
+          dunk = b;
+        }
+        else
+        {
         Asolve = A;
         if (!solveDense(Asolve, dunk, m)) break;
+        }
         double scale = 1.0;
         for (size_t r=0; r<m; ++r)
         {

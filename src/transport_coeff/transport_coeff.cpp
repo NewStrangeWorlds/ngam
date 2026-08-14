@@ -269,11 +269,19 @@ void TransportCoefficients::calculate(
   const double pressure,
   const std::vector<double>& number_densities,
   std::vector<double>& absorption_coeff,
-  std::vector<double>& scattering_coeff)
+  std::vector<double>& scattering_coeff,
+  const BandCorrectionSpec* band_spec,
+  std::vector<double>* band_correction,
+  std::vector<double>* band_peak_coeff)
 {
   absorption_coeff.assign(spectral_grid->nbSpectralPoints(), 0);
   scattering_coeff.assign(spectral_grid->nbSpectralPoints(), 0);
-  
+
+  if (band_spec != nullptr && band_correction != nullptr)
+    band_correction->assign(band_spec->nb_bands, 0.0);
+  if (band_spec != nullptr && band_peak_coeff != nullptr)
+    band_peak_coeff->assign(band_spec->nb_bands, 0.0);
+
   for (unsigned int i=0; i<gas_species.size(); i++)
   {
     //std::cout << gas_species[i]->species_name << "\n";
@@ -282,7 +290,10 @@ void TransportCoefficients::calculate(
       pressure,
       number_densities,
       absorption_coeff,
-      scattering_coeff);
+      scattering_coeff,
+      band_spec,
+      band_correction,
+      band_peak_coeff);
     }
 }
 

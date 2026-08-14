@@ -81,6 +81,18 @@ class SpectralGrid{
     std::vector<size_t> spectralIndexList() {
       return index_list;}
 
+    //band-closure correction (clima_rce_correction): fixed-width bands over the native grid.
+    //The per-band native opacity integral minus its sampled representation closes the local
+    //energy balance for the line cores the sampled list misses (they carry the Planck-mean
+    //emissivity aloft; see doc). 30 cm^-1 keeps the kappa-B covariance error below ~1 K
+    //equivalent at all pressures (measured against the direct native integral).
+    static constexpr double correction_band_width = 30.0;   //cm^-1
+    size_t nbCorrectionBands() const {
+      return wavenumber_list_full.empty() ? 0
+        : static_cast<size_t>(wavenumber_list_full.back()/correction_band_width) + 1;}
+    const std::vector<double>& nativeWavenumbers() const {
+      return wavenumber_list_full;}
+
     void findBinEdges(
       const std::vector< std::vector<double> >& wavenumber_edges,
       std::vector<std::vector<size_t>>& edge_indices);

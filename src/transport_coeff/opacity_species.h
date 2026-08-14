@@ -34,6 +34,17 @@
 namespace ngam{
 
 
+//inputs for the band-closure correction of the local energy balance (clima_rce_correction):
+//trapezoid weights of the sampled point list and the correction band each point falls in.
+//The correction per band is n_s * (int_band sigma dnu - sum_{k in band} w_k sigma_k): the
+//native line opacity the sampled representation misses (or overcounts).
+struct BandCorrectionSpec {
+  const std::vector<double>* point_weights = nullptr;
+  const std::vector<int>* band_of_point = nullptr;
+  size_t nb_bands = 0;
+};
+
+
 class OpacitySpecies {
   public:
     OpacitySpecies(
@@ -55,7 +66,10 @@ class OpacitySpecies {
       const double pressure,
       const std::vector<double>& number_densities,
       std::vector<double>& absorption_coeff,
-      std::vector<double>& scattering_coeff);
+      std::vector<double>& scattering_coeff,
+      const BandCorrectionSpec* band_spec = nullptr,
+      std::vector<double>* band_correction = nullptr,
+      std::vector<double>* band_peak_coeff = nullptr);
     
     const size_t species_index = 0;
     const std::string species_name = "";
@@ -101,6 +115,19 @@ class OpacitySpecies {
       const double local_pressure,
       const double local_temperature,
       std::vector<double>& cross_sections);
+    bool interpolateBandData(
+      const double local_pressure,
+      const double local_temperature,
+      std::vector<double> SampledData::* member,
+      std::vector<double>& band_data);
+    bool calcAbsorptionBandIntegrals(
+      const double local_pressure,
+      const double local_temperature,
+      std::vector<double>& band_integrals);
+    bool calcAbsorptionBandPeaks(
+      const double local_pressure,
+      const double local_temperature,
+      std::vector<double>& band_peaks);
     bool calcScatteringCrossSections(std::vector<double>& cross_sections);
     
     double generalRayleighCrossSection(

@@ -1,6 +1,6 @@
 clearvars;
 
-file_name = 'output_terrestrial.nc';
+file_name = 'output_earth.nc';
 
 % Load the data
 T   = ncread(file_name, 'temperature');

@@ -82,6 +82,10 @@ class LinearisedTemperatureCorrection : public TemperatureCorrection{
     // max radiative flux-conservation error from the last call (excludes convective and
     // optically-thin-skin layers); the driver converges on this.
     double last_flux_residual_ = -1.0;
+    //previous outer iteration's flux residual, for the Tikhonov zone-growth gate: under the
+    //penalty objective the flux residual can never pass an absolute threshold (O(alpha) floor),
+    //so "converged for the present zone" translates to "the residual has PLATEAUED at its floor"
+    double tikh_gate_resid_prev_ = -1.0;
 
     // convection: the contiguous deep zone [0, rcb_] (-1 = none), grown only (never shrunk or
     // fragmented) and only once the inner Newton has settled at near-radiative-equilibrium, so the

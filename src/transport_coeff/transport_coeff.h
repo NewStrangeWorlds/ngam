@@ -43,7 +43,10 @@ class TransportCoefficients {
       const double pressure,
       const std::vector<double>& number_densities,
       std::vector<double>& absorption_coeff,
-      std::vector<double>& scattering_coeff);
+      std::vector<double>& scattering_coeff,
+      const BandCorrectionSpec* band_spec = nullptr,
+      std::vector<double>* band_correction = nullptr,
+      std::vector<double>* band_peak_coeff = nullptr);
 
   private:
     std::string cross_section_file_path;

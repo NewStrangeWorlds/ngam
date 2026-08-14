@@ -333,6 +333,91 @@ void OpacitySpecies::calcAbsorptionCrossSections(
 }
 
 
+//bilinear (log P, T) interpolation of per-band native data (integrals or peaks), the exact
+//mirror of calcAbsorptionCrossSections above operating on the given SampledData member.
+//Returns false when no line data (or no band data) exist for this species.
+bool OpacitySpecies::interpolateBandData(
+  const double pressure, const double temperature,
+  std::vector<double> SampledData::* member, std::vector<double>& band_data)
+{
+  if (cross_section_available == false) return false;
+
+  std::vector<SampledData*> data_points = findClosestDataPoints(pressure, temperature);
+
+  checkDataAvailability(data_points);
+
+  if ((data_points[0]->*member).size() != band_data.size()) return false;
+
+
+  if (data_points[0] == data_points[1] && data_points[0] == data_points[2] && data_points[0] == data_points[3])
+  {
+    for (size_t i=0; i<band_data.size(); ++i)
+      band_data[i] = std::pow(10.0, (data_points[0]->*member)[i]);
+
+    return true;
+  }
+
+
+  auto linearInterpolation = [](
+    const double x1, const double x2, const double y1, const double y2, const double x) {
+      return y1 + (y2 - y1) * (x - x1)/(x2 - x1);};
+
+
+  std::vector<double> data_lower_t = data_points[0]->*member;
+  std::vector<double> data_upper_t = data_points[2]->*member;
+
+
+  if (data_points[0] != data_points[1])
+    for (size_t i=0; i<data_lower_t.size(); ++i)
+      data_lower_t[i] = linearInterpolation(
+        data_points[0]->log_pressure,
+        data_points[1]->log_pressure,
+        (data_points[0]->*member)[i],
+        (data_points[1]->*member)[i],
+        std::log10(pressure));
+
+  if (data_points[2] != data_points[3])
+    for (size_t i=0; i<data_upper_t.size(); ++i)
+      data_upper_t[i] = linearInterpolation(
+        data_points[2]->log_pressure,
+        data_points[3]->log_pressure,
+        (data_points[2]->*member)[i],
+        (data_points[3]->*member)[i],
+        std::log10(pressure));
+
+  if (data_points[0] != data_points[2])
+    for (size_t i=0; i<band_data.size(); ++i)
+      band_data[i] = linearInterpolation(
+        data_points[0]->temperature,
+        data_points[2]->temperature,
+        data_lower_t[i],
+        data_upper_t[i],
+        temperature);
+  else
+    band_data = data_lower_t;
+
+
+  for (size_t i=0; i<band_data.size(); ++i)
+    band_data[i] = std::pow(10.0, band_data[i]);
+
+  return true;
+}
+
+
+bool OpacitySpecies::calcAbsorptionBandIntegrals(
+  const double pressure, const double temperature, std::vector<double>& band_integrals)
+{
+  return interpolateBandData(pressure, temperature, &SampledData::band_integrals, band_integrals);
+}
+
+
+bool OpacitySpecies::calcAbsorptionBandPeaks(
+  const double pressure, const double temperature, std::vector<double>& band_peaks)
+{
+  return interpolateBandData(pressure, temperature, &SampledData::band_peaks, band_peaks);
+}
+
+
 //checks if all sampled cross sections needed later are available and samples them if not...
 void OpacitySpecies::checkDataAvailability(std::vector<SampledData*>& data_points)
 {
@@ -345,7 +430,14 @@ void OpacitySpecies::checkDataAvailability(std::vector<SampledData*>& data_point
     {
       if (sampling_points.size() == 0) sampling_points = spectral_grid->spectralIndexList();
 
-      i->sampleCrossSections(sampling_points, species_mass);
+      //native wavenumbers + band layout let the sampling pass also record the per-band
+      //native integrals for the band-closure correction (one pass over the loaded file)
+      i->sampleCrossSections(
+        sampling_points,
+        species_mass,
+        &spectral_grid->nativeWavenumbers(),
+        SpectralGrid::correction_band_width,
+        spectral_grid->nbCorrectionBands());
     }
   }
 
@@ -357,34 +449,72 @@ void OpacitySpecies::calcTransportCoefficients(
   const double pressure,
   const std::vector<double>& number_densities,
   std::vector<double>& absorption_coeff,
-  std::vector<double>& scattering_coeff)
-{ 
+  std::vector<double>& scattering_coeff,
+  const BandCorrectionSpec* band_spec,
+  std::vector<double>* band_correction,
+  std::vector<double>* band_peak_coeff)
+{
   double number_density = number_densities[species_index];
 
   for (const auto & i : cia_collision_partner)
     number_density *= number_densities[i];
-  
+
   if (number_density == 0) return;
 
 
   double reference_pressure = pressure;
-  
+
   //if the opacity species uses a different species for its tabulated pressure
-  //use the partial pressure of that reference species here 
+  //use the partial pressure of that reference species here
   if (pressure_reference_species != _TOTAL)
     reference_pressure *= number_densities[pressure_reference_species]/number_densities[_TOTAL];
 
 
   std::vector<double> cross_sections(spectral_grid->nbSpectralPoints(), 0.0);
-  
-  
-  if (cross_section_available == true) 
+
+
+  if (cross_section_available == true)
   {
     calcAbsorptionCrossSections(reference_pressure, temperature, cross_sections);
-    
+
     #pragma omp parallel for
     for (size_t i=0; i<spectral_grid->nbSpectralPoints(); ++i)
       absorption_coeff[i] += cross_sections[i] * number_density;
+
+    //band-closure correction: what the sampled representation of THIS species' line opacity
+    //misses per band, n_s * (int_band sigma dnu - sum_{k in band} w_k sigma_k). Only line
+    //absorption enters -- Rayleigh/continuum/CIA are spectrally smooth and already exact on
+    //the sampled grid. Where the sampling is complete the two terms cancel and the
+    //correction vanishes on its own.
+    if (band_spec != nullptr && band_correction != nullptr
+        && band_spec->nb_bands > 0 && band_correction->size() == band_spec->nb_bands)
+    {
+      std::vector<double> band_integrals(band_spec->nb_bands, 0.0);
+
+      if (calcAbsorptionBandIntegrals(reference_pressure, temperature, band_integrals))
+      {
+        for (size_t i=0; i<spectral_grid->nbSpectralPoints(); ++i)
+        {
+          const int b = (*band_spec->band_of_point)[i];
+          if (b >= 0 && static_cast<size_t>(b) < band_spec->nb_bands)
+            band_integrals[b] -= (*band_spec->point_weights)[i] * cross_sections[i];
+        }
+
+        for (size_t b=0; b<band_spec->nb_bands; ++b)
+          (*band_correction)[b] += band_integrals[b] * number_density;
+      }
+
+      //peak absorption coefficient per band (escape-probability weighting): max over species,
+      //since different species' line cores rarely coincide within a band
+      if (band_peak_coeff != nullptr && band_peak_coeff->size() == band_spec->nb_bands)
+      {
+        std::vector<double> band_peaks(band_spec->nb_bands, 0.0);
+
+        if (calcAbsorptionBandPeaks(reference_pressure, temperature, band_peaks))
+          for (size_t b=0; b<band_spec->nb_bands; ++b)
+            (*band_peak_coeff)[b] = std::max((*band_peak_coeff)[b], band_peaks[b] * number_density);
+      }
+    }
   }
 
 

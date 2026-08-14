@@ -62,16 +62,27 @@ class SampledData{
         {}
     ~SampledData();
     void sampleCrossSections(
-      const std::vector<size_t>& sampling_list, const double species_mass);
+      const std::vector<size_t>& sampling_list, const double species_mass,
+      const std::vector<double>* native_wavenumbers = nullptr,
+      const double band_width = 0.0,
+      const size_t nb_bands = 0);
     void deleteSampledData();
 
     const double pressure = 0.0;
     const double log_pressure = 0.0;
     const double temperature = 0.0;
-    
+
     bool is_sampled = false;
 
     std::vector<double> cross_sections;
+    //per-band integral int_band sigma dnu over the FULL native grid (band-closure correction),
+    //same unit convention and log10 storage as cross_sections; computed during sampling, the
+    //only moment the complete file is in memory
+    std::vector<double> band_integrals;
+    //per-band PEAK sigma over the native grid (escape-probability weighting of the closure:
+    //the core optical depth to space decides whether the missing cores are thermalised);
+    //same unit convention and log10 storage
+    std::vector<double> band_peaks;
   private:
     CrossSectionFile data_file;
 };

@@ -248,6 +248,12 @@ void DiscreteOrdinates::calculate(
   else
     configs[thread_id].use_thermal_emission = false;
 
+  // a point with no thermal emission anywhere in the column has zero incoming flux at a
+  // diffusion (self-luminous) lower boundary as well -- disable the BC instead of tripping
+  // the solver's consistency check (which, inside the OpenMP region, is a process abort)
+  if (!configs[thread_id].use_thermal_emission)
+    configs[thread_id].use_diffusion_lower_bc = false;
+
   configs[thread_id].compute_temperature_jacobian = output.compute_jacobian;
 
   auto results = solvers[thread_id](configs[thread_id]);

@@ -253,6 +253,12 @@ void AddingDoubling::calculate(
 
   configs[thread_id].use_thermal_emission = thermal_on;
 
+  // a point with no thermal emission anywhere in the column has zero incoming flux at a
+  // diffusion (self-luminous) lower boundary as well -- disable the BC instead of tripping
+  // the solver's consistency check (which, inside the OpenMP region, is a process abort)
+  if (!thermal_on)
+    configs[thread_id].use_diffusion_lower_bc = false;
+
   // an explicit (Lambertian) surface emits at surface_temperature; otherwise the
   // bottom level temperature is used (surface_temperature < 0). When thermal
   // emission is off the surface temperature must stay < 0 (ADConfig::validate).
