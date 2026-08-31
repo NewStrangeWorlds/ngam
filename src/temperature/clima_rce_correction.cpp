@@ -1732,6 +1732,53 @@ void ClimaRCECorrection::calcCorrection(
   snapshotBandJ();   // freeze the closure's Jbar at the snapped-base radiation field
   rebuildJ();
   const bool dbg = std::getenv("CLIMA_DBG") != nullptr;
+  // CLIMA_PATHCHECK (temporary diagnostic): evaluate g at the IDENTICAL point with want_jac=false
+  // (the trial path) and report the row-wise difference to gbase. Any nonzero difference is a
+  // jac/no-jac evaluation-path inconsistency, which puts a hard floor under theta in the NLEQ
+  // monotonicity test (theta(lambda->0) = ||J^-1 g_nojac|| / ||J^-1 g_jac|| instead of 1).
+  if (std::getenv("CLIMA_PATHCHECK"))
+  {
+    std::vector<double> g_nojac;
+    evalG(x, /*want_jac=*/false, g_nojac);
+    double dmax = 0.0; size_t rmax = 0;
+    for (size_t r = 0; r < m; ++r)
+      if (std::abs(g_nojac[r] - gbase[r]) > dmax)
+      { dmax = std::abs(g_nojac[r] - gbase[r]); rmax = r; }
+    std::fprintf(stderr,
+      "  [pathcheck] max|g_nojac - g_jac| = %.6e @lv%zu  (g_jac=%.6e g_nojac=%.6e)\n",
+      dmax, unk[rmax], gbase[rmax], g_nojac[rmax]);
+    // continuity probe ALONG THE NEWTON DIRECTION (a uniform relative perturbation leaves the
+    // link gradients dlnT/dlnP exactly unchanged, so gradient-keyed branches are blind to it).
+    // Replicates the failing NLEQ trial: for each lambda, is |g(x+lam*dx) - g(x)| ~ lam (smooth)
+    // or lambda-independent (a jump)?
+    {
+      std::vector<double> Jc = J, dxp(m);
+      for (size_t r = 0; r < m; ++r) dxp[r] = -gbase[r];
+      if (solveDenseLU(Jc, dxp, m))
+      {
+        for (double eps : {1e-4, 1e-2, 1.0})
+        {
+          std::vector<double> xp = x, gp;
+          for (size_t r = 0; r < m; ++r) xp[r] = std::max(1.0, x[r] + eps*dxp[r]);
+          evalG(xp, /*want_jac=*/false, gp);
+          double d1 = 0.0, d2 = 0.0, d3 = 0.0; size_t r1 = 0, r2 = 0, r3 = 0;
+          for (size_t r = 0; r < m; ++r)
+          {
+            const double d = std::abs(gp[r] - gbase[r]);
+            if (d > d1)      { d3=d2; r3=r2; d2=d1; r2=r1; d1=d; r1=r; }
+            else if (d > d2) { d3=d2; r3=r2; d2=d; r2=r; }
+            else if (d > d3) { d3=d; r3=r; }
+          }
+          std::fprintf(stderr,
+            "  [dirprobe] eps=%.0e  top|dg|: lv%zu %.3e (g=%.3e)  lv%zu %.3e  lv%zu %.3e\n",
+            eps, unk[r1], d1, gbase[r1], unk[r2], d2, unk[r3], d3);
+        }
+      }
+    }
+    // restore the base radiation field + Jacobian state for the solve below
+    evalG(x, /*want_jac=*/true, gbase);
+    rebuildJ();
+  }
   (void) dnorm;
 
   // ---- smoothness regularisation: a small penalty on the discrete FOURTH difference of T, added to the

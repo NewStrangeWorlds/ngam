@@ -12,15 +12,9 @@ opacity_data_path = "/media/data/opacity_data/helios-k/"
 
 opacity_species = [
     ("N2",         "Rayleigh"),
-    ("O2",         "Rayleigh"),
-    ("O3",         "Molecules/16O3__HITRAN2020_e2b"),
-    ("O3",         "Molecules/O3_visible_HITRAN"),
-    ("H2O",        "Molecules/H2O_HITRAN_cut25"),
-    ("CH4",        "Molecules/12C-1H4__YT34to10_e2b"),
-    #("N2O",        "Molecules/14N2-16O__HITEMP2019_e2b"),
+    ("CO2",        "Rayleigh"),
     ("CO2",        "Molecules/12C-16O2__CDSD_4000_e2b"),
     ("CO2-CIA",    "none"),
-    ("H2O-CIA",    "none")
 ]
 
 species_symbols = [s[0] for s in opacity_species]
@@ -31,7 +25,7 @@ species_folders = [s[1] for s in opacity_species]
 
 grid = pyngam.SpectralGrid(
     opacity_data_path, "",
-    2, 5000.0,
+    2, 3000.0,
     0.15, 100.0)
 
 # grid = pyngam.SpectralGrid(
@@ -54,47 +48,44 @@ mix_ratios = [0.0] * len(all_species)
 
 # set mixing ratios by species name
 composition = {
-    "CO2":  1e-6,
-    "O2":  0.2,
-    "H2O": 1e-4,
-    "N2": 1-0.2-1e-6,
+    "CO2":  0.965,
+    "N2": 0.035,
 }
-chem_species = ["N2",  "CO2"]
-mix_ratios = [0.02, 0.98]  # H2, O2, H2O, N2
+chem_species = ["CO2",  "N2"]
+mix_ratios = [0.965, 0.035]  # H2, O2, H2O, N2
 
 
 model = pyngam.TerrestrialPlanet(
     spectral_grid=grid,
     nb_grid_points=100,
-    atmos_boundary_pressures=[1, 1e-5],
+    atmos_boundary_pressures=[92, 1e-5],
     cross_section_file_path=opacity_data_path,
     opacity_species_symbol=species_symbols,
     opacity_species_folder=species_folders,
     use_clouds=False,
     chemistry=[
-        ("fixed", ["data/Earth/earth_standard_composition.dat"]),
-        #("manabe_wetherald", []),   # overrides H2O with RH profile (RH0=0.77)
+        ("iso", chem_species),
     ],
     chemistry_parameters=mix_ratios,
     rt_type="adding_doubling",
     rt_params=["2"],
-    surface_gravity=980.0,       # cm/s^2 (~ Earth)
+    surface_gravity=887.0,       # cm/s^2 (~ Earth)
     zenith_angle=0.5,            # cos(60 deg) = global average approximation
     stellar_type="tabulated",
     stellar_params=["data/stellar_spectra/spectrum_sun.dat"],   # stellar temperature in K (Sun)
-    instellation=1361e3*0.5,     # erg/cm^2/s (solar constant: 1361 W/m^2 * 1e3, 0.5 for fast rotator)
+    instellation= 2601e3*0.5,     # erg/cm^2/s (solar constant: 1361 W/m^2 * 1e3, 0.5 for fast rotator)
     #surface_type="variable_albedo",       # variable: albedo from file
     #surface_params=["data/Earth/earth_spectral_surface_reflection.dat"], 
     surface_type="simple",       # variable: albedo from file
-    surface_params=["0.3", "2.0"],  #albedo file
+    surface_params=["0.1", "2.0"],  #albedo file
     max_iterations=100,
-    temperature_correction="ratio_ul",
+    temperature_correction="flux_divergence",
     convergence_threshold=1e-5,
     iteration_gamma=0.2,
     lre_fraction=0.1,
     use_convective_adjustment=True,
     min_convection_pressure = 1e-2,
-    convection_type="mlt_moist",
+    convection_type="dry",
     ng_interval=0,
     max_change_per_iteration=0.1)
 
@@ -107,8 +98,8 @@ model = pyngam.TerrestrialPlanet(
 model.initialize(
     temperature_type="adiabat",
     temperature_config=[],
-    temperature_parameters=[288.0, 160.0],   # T_surface, T_stratosphere floor
-    init_chemistry=[("fixed", ["data/Earth/earth_standard_composition.dat"])],
+    temperature_parameters=[650.0, 160.0],   # T_surface, T_stratosphere floor
+    init_chemistry=[("iso", chem_species)],
     init_chemistry_parameters=mix_ratios
     )
 
@@ -142,10 +133,10 @@ print(f"Net flux at bottom: {flux_total[0]:.4e} erg/cm2/s")
 
 # --- Save ---
 
-save_model("output_earth.nc", model, grid, config={
-    "surface_gravity": 980.0,
-    "surface_albedo": 0.3,
+save_model("output_venus.nc", model, grid, config={
+    "surface_gravity": 887.0,
+    "surface_albedo": 0.1,
     "stellar_temperature": 5780.0,
-    "instellation": 1361e3,
+    "instellation": 2601e3,
     "surface_temperature": model.surface_temperature,
 })

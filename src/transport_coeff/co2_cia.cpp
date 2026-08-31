@@ -34,11 +34,12 @@ bool GasCO2CIA::calcContinuumAbsorption(
   #pragma omp parallel for
   for (size_t i=0; i<nb_wavelengths; ++i)
   {
-    const double sigma = compute(
-      temp_calc, 
-      spectral_grid->wavenumber_list[i], 
+    //volume absorption coefficient in cm-1; the CO2 density is already
+    //included via the partial pressure (k * amagat^2)
+    absorption_coeff[i] = compute(
+      temp_calc,
+      spectral_grid->wavenumber_list[i],
       partial_pressure);
-    absorption_coeff[i] = sigma * number_density;
   }
 
   return true;

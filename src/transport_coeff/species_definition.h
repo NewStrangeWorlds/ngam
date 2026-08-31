@@ -401,7 +401,7 @@ class GasH2OCIA : public OpacitySpecies {
       std::vector<double>& absorption_coeff);
     private:
       static constexpr int t_ref = 296; //reference temperature for the CIA data (K)
-      static constexpr int p_ref = 1013 * 0.001; //reference pressure for the CIA data (bar)
+      static constexpr double p_ref = 1013 * 0.001; //reference pressure for the CIA data (bar)
 
       bool data_loaded_ = false;
 
