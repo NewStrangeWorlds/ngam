@@ -386,7 +386,18 @@ class GasPlanet : public GenericObject {
 
         if (converged)
         {
-          std::cout << "\n  Converged after " << iter + 1 << " iterations.\n" << std::endl;
+          // TOA energy-balance diagnostic. The corrector's convergence residual excludes the
+          // optically-thin skin (zeta < skin_zeta, held on local RE), so a TOA net-flux offset --
+          // the RT backend's thin-layer accuracy floor, ~1e-4 of the transported flux for
+          // adding-doubling, invariant to stream count and grid resolution -- is never driven
+          // below the threshold. Report it so it is not mistaken for converged energy balance.
+          const double toa_flux_error = radiation_field.flux_total.back() - target_flux;
+          std::cout << "\n  Converged after " << iter + 1 << " iterations.\n"
+                    << "  TOA net-flux error F_net(TOA) - F_int: "
+                    << std::scientific << std::setprecision(4) << toa_flux_error
+                    << " erg/cm2/s (" << toa_flux_error / flux_scale
+                    << " of mu*S + F_int; optically-thin skin, excluded from the convergence gate)\n"
+                    << std::endl;
           return true;
         }
       }

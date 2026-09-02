@@ -50,8 +50,7 @@ FetchContent_MakeAvailable(disortpp)
 FetchContent_Declare(
   adding_doubling
   GIT_REPOSITORY https://github.com/NewStrangeWorlds/AddingDoublingRT
-  GIT_TAG        main
-  GIT_SHALLOW    TRUE
+  GIT_TAG        a39726198608e1d8986537fc3fde7e9057bf5ee1 # dev: Jacobian + small-stream initial-solution fixes
 )
 FetchContent_GetProperties(adding_doubling)
 if(NOT adding_doubling_POPULATED)

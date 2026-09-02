@@ -366,7 +366,16 @@ class BrownDwarf : public GenericObject {
 
         if (converged)
         {
-          std::cout << "\n  Converged after " << iter + 1 << " iterations.\n" << std::endl;
+          // TOA energy-balance diagnostic (see gas_planet.h): the convergence residual excludes
+          // the optically-thin skin, so the TOA net-flux offset -- the RT backend's thin-layer
+          // accuracy floor -- is reported here instead of being gated on.
+          const double toa_flux_error = radiation_field.flux_total.back() - target_flux;
+          std::cout << "\n  Converged after " << iter + 1 << " iterations.\n"
+                    << "  TOA net-flux error F_net(TOA) - F_int: "
+                    << std::scientific << std::setprecision(4) << toa_flux_error
+                    << " erg/cm2/s (" << toa_flux_error / target_flux
+                    << " of F_int; optically-thin skin, excluded from the convergence gate)\n"
+                    << std::endl;
           return true;
         }
       }
