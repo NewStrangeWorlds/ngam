@@ -40,6 +40,11 @@ class Chemistry{
       std::vector<std::vector<double>>& number_densities,
       std::vector<double>& mean_molecular_weight) = 0;
     size_t nbParameters() {return nb_parameters;}
+
+    // the module's own runtime parameters (e.g. metallicity and C/O for the equilibrium module,
+    // the mixing ratios for the isoprofile module), set from its module spec at construction;
+    // the objects pass these to calcChemicalComposition
+    std::vector<double> parameters;
   protected:
     size_t nb_parameters {};
     std::vector<chemical_species_id> species;

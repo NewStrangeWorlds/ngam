@@ -12,7 +12,6 @@
 #include <omp.h>
 
 
-#include "../config/global_config.h"
 #include "../spectral_grid/spectral_grid.h"
 
 

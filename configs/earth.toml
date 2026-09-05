@@ -1,0 +1,56 @@
+# Modern Earth, radiative-convective equilibrium.
+#
+#   python -m pyngam configs/earth.toml
+#
+# The sections mirror the Python interface: [grid] is a SpectralGrid factory and its arguments,
+# [model] the model class and its keyword arguments, [initial_profile] the initialize() spec.
+# Pluggable components are inline tables with a `type` entry (or a bare type name).
+
+[grid]
+type = "covering"
+opacity_path = "/media/data/opacity_data/helios-k/"
+wavelength_min = 0.15
+wavelength_max = 100.0
+temperature_min = 100.0
+temperature_max = 350.0
+nb_temperatures = 30
+nb_points = 10000
+stellar_temperature = 5772.0
+nb_points_stellar = 10000
+
+[model]
+type = "TerrestrialPlanet"
+surface_gravity = 980.0              # cm/s^2
+instellation = 680500.0              # erg/cm^2/s (solar constant x 0.5 for a fast rotator)
+zenith_angle = 0.5                   # cos(60 deg)
+stellar_spectrum = { type = "tabulated", file = "data/stellar_spectra/spectrum_sun.dat" }
+surface = { type = "simple", albedo = 0.3, wavelength_switch = 2.0 }
+nb_grid_points = 100
+boundary_pressures = [1.0, 1e-5]     # bar: surface -> top
+opacity_species = [
+    ["N2",      "Rayleigh"],
+    ["O2",      "Rayleigh"],
+    ["O3",      "Molecules/16O3__HITRAN2020_e2b"],
+    ["O3",      "Molecules/O3_visible_HITRAN"],
+    ["H2O",     "Molecules/H2O_HITRAN_cut25"],
+    ["CH4",     "Molecules/12C-1H4__YT34to10_e2b"],
+    ["CO2",     "Molecules/12C-16O2__CDSD_4000_e2b"],
+    ["CO2-CIA", "none"],
+    ["H2O-CIA", "none"],
+]
+chemistry = [
+    { type = "fixed", file = "data/Earth/earth_standard_composition.dat" },
+    # { type = "manabe_wetherald", surface_rh = 0.77 },
+]
+radiative_transfer = { type = "adding_doubling", nb_streams = 2 }
+convection = { type = "mlt_moist", min_pressure = 1e-2 }
+solver = { type = "ratio_ul", max_iterations = 100, convergence_threshold = 1e-5 }
+
+[initial_profile]
+type = "adiabat"
+surface_temperature = 288.0
+stratosphere_temperature = 160.0
+# restart instead:  type = "file"  file = "output_earth.nc"
+
+[output]
+file = "output_earth.nc"

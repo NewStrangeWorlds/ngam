@@ -8,7 +8,6 @@
 
 #include "temperature.h"
 
-#include "../config/global_config.h"
 #include "../additional/exceptions.h"
 
 #include "milne_solution_temperature.h"

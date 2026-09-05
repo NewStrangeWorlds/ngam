@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.14 FATAL_ERROR)
 project(ngam C CXX)
 
 # Options
-option(BUILD_PYTHON_BINDINGS "Build Python bindings via pybind11" OFF)
+option(BUILD_PYTHON_BINDINGS "Build the Python module (the only user interface)" ON)
 
 # C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -18,9 +18,6 @@ endif()
 # -march=native is required so that ngam and its dependencies (DisORT++, FastChem)
 # agree on SIMD alignment for Eigen types
 add_compile_options(-Wall -pedantic -march=native)
-
-# Place executable in the source directory
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # When building Python bindings, all libraries (including fetched dependencies)
 # must be compiled with position-independent code
@@ -82,11 +79,10 @@ if(BUILD_PYTHON_BINDINGS)
 endif()
 
 
-# Library sources (everything except main.cpp)
+# Library sources
 set(LIB_SRC
   src/additional/aux_functions.cpp
   src/additional/thermodynamic_data.cpp
-  src/config/global_config.cpp
   src/spectral_grid/convert.cpp
   src/spectral_grid/spectral_grid.cpp
   src/spectral_grid/spectral_grid_interpolate.cpp
@@ -124,13 +120,12 @@ target_link_libraries(ngam_lib PUBLIC fastchem_lib OpenMP::OpenMP_CXX disortpp a
 target_include_directories(ngam_lib PRIVATE ${eigen_SOURCE_DIR})
 set_target_properties(ngam_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Main executable
-add_executable(ngam src/main.cpp)
-target_link_libraries(ngam PRIVATE ngam_lib)
-
-# Python bindings (optional)
+# Python module: the compiled core `_pyngam` is placed inside the pure-Python package
+# `pyngam/` in the source tree, so `import pyngam` works from the repository root.
 if(BUILD_PYTHON_BINDINGS)
-  pybind11_add_module(pyngam src/python/bindings.cpp)
-  target_link_libraries(pyngam PRIVATE ngam_lib)
-  install(TARGETS pyngam LIBRARY DESTINATION .)
+  pybind11_add_module(_pyngam src/python/bindings.cpp)
+  target_link_libraries(_pyngam PRIVATE ngam_lib)
+  set_target_properties(_pyngam PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/pyngam)
+  install(TARGETS _pyngam LIBRARY DESTINATION pyngam)
 endif()

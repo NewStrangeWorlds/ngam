@@ -1,9 +1,20 @@
+/*
+* This file is part of the ngam code.
+* Copyright (C) 2026 Daniel Kitzmann
+*
+* ngam is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*/
+
 #ifndef TERRESTRIAL_PLANET_H
 #define TERRESTRIAL_PLANET_H
 
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <iomanip>
 #include <memory>
@@ -11,199 +22,40 @@
 #include "generic_object.h"
 #include "../additional/physical_const.h"
 #include "../additional/ng_accelerator.h"
-#include "../additional/thermodynamic_data.h"
-#include "../temperature/select_temperature_profile.h"
-#include "../temperature/time_stepping_temperature.h"
-#include "../temperature/time_stepping_lre_temperature.h"
-#include "../temperature/linearised_temperature_correction.h"
-#include "../temperature/clima_rce_correction.h"
-#include "../temperature/select_temperature_correction.h"
-#include "../chemistry/select_chemistry.h"
-#include "../convection/dry_adiabatic.h"
-#include "../convection/moist_adiabatic.h"
-#include "../convection/mixing_length.h"
+#include "../additional/quadrature.h"
 #include "../stellar/stellar_spectrum.h"
+#include "../stellar/select_stellar_spectrum.h"
 #include "../surface/generic_surface.h"
+#include "../surface/select_surface.h"
 
 
 namespace ngam {
 
-
+// Terrestrial planet: an irradiated atmosphere on top of a solid surface. Plane-parallel with
+// constant gravity; the surface energy balance F_net(surface) = 0 closes the problem (no
+// internal heat flux).
 class TerrestrialPlanet : public GenericObject {
   public:
     TerrestrialPlanet(
       SpectralGrid* spectral_grid,
-      size_t nb_grid_points,
-      const std::vector<double>& atmos_boundary_pressures,
-      const std::string& cross_section_file_path,
-      const std::vector<std::string>& opacity_species_symbol,
-      const std::vector<std::string>& opacity_species_folder,
-      bool use_clouds,
-      std::vector<std::unique_ptr<Chemistry>> chemistry,
-      std::unique_ptr<RadiativeTransfer> radiative_transfer,
-      double surface_gravity_,
-      double zenith_angle_,
-      std::unique_ptr<StellarSpectrum> stellar_spectrum_,
-      std::unique_ptr<GenericSurface> surface_,
-      const std::vector<double>& chemistry_parameters_,
-      size_t max_iterations_ = 100,
-      double convergence_threshold_ = 1e-4,
-      double iteration_gamma_ = 0.5,
-      bool use_convective_adjustment_ = true,
-      std::string convection_type_ = "mlt",
-      size_t ng_interval_ = 10,
-      double lre_fraction_ = 0.0,
-      double min_convection_pressure_ = 1e-3,
-      double max_change_per_iteration_ = 0.1,
-      std::string temperature_correction_ = "ratio_ul",
-      std::vector<std::string> temperature_correction_parameters_ = {},
-      std::vector<std::string> convection_parameters_ = {})
+      const ModelConfig& config,
+      const double surface_gravity_,
+      const double instellation,
+      const double zenith_angle_,
+      const ModuleSpec& stellar_spectrum_spec,
+      const ModuleSpec& surface_spec)
       : GenericObject(
-          spectral_grid,
-          nb_grid_points,
-          atmos_boundary_pressures,
-          cross_section_file_path,
-          opacity_species_symbol,
-          opacity_species_folder,
-          use_clouds,
-          std::move(chemistry),
-          std::move(radiative_transfer)),
-        surface_gravity(surface_gravity_),
+          spectral_grid, config, surface_gravity_, /*bottom_radius=*/0.0,
+          /*use_variable_gravity=*/false,
+          /*has_surface=*/true, /*default_min_convection_pressure=*/1e-3),
         zenith_angle(zenith_angle_),
-        stellar_spectrum(std::move(stellar_spectrum_)),
-        surface(std::move(surface_)),
-        chemistry_parameters(chemistry_parameters_),
-        max_iterations(max_iterations_),
-        convergence_threshold(convergence_threshold_),
-        iteration_gamma(iteration_gamma_),
-        ng_interval(ng_interval_),
-        lre_fraction(lre_fraction_),
-        max_change_per_iteration(max_change_per_iteration_),
-        temperature_correction(temperature_correction_),
-        temperature_correction_parameters(temperature_correction_parameters_)
+        stellar_spectrum(selectStellarSpectrum(stellar_spectrum_spec, instellation)),
+        surface(selectSurface(surface_spec, spectral_grid))
     {
       // precompute stellar flux per wavenumber
       stellar_flux = stellar_spectrum->calcFlux(spectral_grid->wavenumber_list);
-
-      if (use_convective_adjustment_)
-      {
-        if (convection_type_ == "mlt" || convection_type_ == "mlt_moist")
-        {
-          // smooth mixing-length convection (doc/mlt_convection_design.md); requires ratio_ul.
-          // convection_parameters[0] = mixing-length alpha (default 1; the converged T(P)
-          // is insensitive to it -- see the alpha regression test in the design note).
-          const double alpha =
-            convection_parameters_.empty() ? 1.0 : std::stod(convection_parameters_[0]);
-          convection = std::make_unique<MixingLengthConvection>(
-            convection_type_ == "mlt_moist", alpha, min_convection_pressure_);
-        }
-        else if (convection_type_ == "moist")
-          convection = std::make_unique<MoistAdiabaticAdjustment>(10, min_convection_pressure_);
-        else
-          convection = std::make_unique<DryAdiabaticAdjustment>(10, min_convection_pressure_);
-      }
     }
     virtual ~TerrestrialPlanet() {}
-
-    void initialize(
-      const std::string& temperature_type,
-      const std::vector<std::string>& temperature_config,
-      const std::vector<double>& temperature_parameters,
-      const std::vector<std::pair<std::string, std::vector<std::string>>>& init_chemistry_configs,
-      const std::vector<double>& init_chemistry_parameters)
-    {
-      // create init chemistry modules (shared by both init paths below)
-      std::vector<std::unique_ptr<Chemistry>> init_chemistry;
-      for (auto& [type, params] : init_chemistry_configs)
-        init_chemistry.push_back(selectChemistryModule(type, params));
-
-      auto runInitChemistry = [&]() {
-        size_t param_offset = 0;
-        for (auto& chem : init_chemistry)
-        {
-          std::vector<double> params(
-            init_chemistry_parameters.begin() + param_offset,
-            init_chemistry_parameters.begin() + param_offset + chem->nbParameters());
-          param_offset += chem->nbParameters();
-
-          chem->calcChemicalComposition(
-            params,
-            atmosphere.temperature,
-            atmosphere.pressure,
-            atmosphere.number_densities,
-            atmosphere.mean_molecular_weight);
-        }
-      };
-
-      if (temperature_type == "adiabat")
-      {
-        // "adiabat": T_surface down-integrated along the ACTIVE convection scheme's neutrality
-        // gradient (dry, moist, mlt...), reduced 2%, floored at T_stratosphere -- clima's start.
-        // The 2% bias puts every link on the STABLE side of the scheme's own threshold, which is
-        // what lets the MLT corrector skip its easy-start homotopy (measured: moist n=100 in 15
-        // iterations instead of 36; Manabe-Wetherald in 61 instead of 126 -- same roots; see
-        // doc/mlt_convection_design.md Sec. 10.6). Using convectiveGradient keeps the init
-        // consistent with the configured scheme by construction -- no duplicated formula can rot.
-        // The gradient needs the composition, so: isothermal pass -> chemistry -> integrate ->
-        // chemistry again (the last pass matters for T-dependent chemistry, e.g. the
-        // Manabe-Wetherald humidity profile).
-        if (temperature_parameters.size() < 2)
-          throw InvalidInput(std::string("initialize"),
-            "adiabat initial profile needs parameters [T_surface, T_stratosphere]\n");
-        const double t_surf  = temperature_parameters[0];
-        const double t_strat = temperature_parameters[1];
-        const size_t n = atmosphere.pressure.size();
-
-        atmosphere.temperature.assign(n, t_surf);
-        runInitChemistry();
-
-        constexpr double stable_bias = 0.98;
-        for (size_t i = 1; i < n; ++i)
-        {
-          const double nab = convection
-            ? convection->convectiveGradient(
-                atmosphere.number_densities[i-1], atmosphere.temperature[i-1],
-                atmosphere.pressure[i-1])
-            : ThermodynamicData::adiabaticGradient(
-                atmosphere.number_densities[i-1], atmosphere.temperature[i-1]);
-          atmosphere.temperature[i] = std::max(t_strat,
-            atmosphere.temperature[i-1]
-              * std::pow(atmosphere.pressure[i]/atmosphere.pressure[i-1], stable_bias*nab));
-        }
-        runInitChemistry();
-      }
-      else
-      {
-        auto temp_profile = selectTemperatureProfile(temperature_type, temperature_config);
-        auto init_params = temperature_parameters;
-        temp_profile->calcProfile(init_params, surface_gravity, atmosphere);
-        runInitChemistry();
-      }
-
-      atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
-
-      // initialize surface temperature from bottom of atmosphere
-      surface->temperature = atmosphere.temperature[0];
-
-      std::cout << "\n  Initialized from " << temperature_type
-                << " temperature profile + chemistry.\n";
-    }
-
-    void initializeFromArrays(
-      const std::vector<double>& temperature,
-      const std::vector<std::vector<double>>& number_densities,
-      const std::vector<double>& mean_molecular_weight)
-    {
-      atmosphere.temperature = temperature;
-      atmosphere.number_densities = number_densities;
-      atmosphere.mean_molecular_weight = mean_molecular_weight;
-
-      atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
-
-      surface->temperature = atmosphere.temperature[0];
-
-      std::cout << "\n  Initialized from external arrays.\n";
-    }
 
     double getSurfaceTemperature() const { return surface->temperature; }
 
@@ -218,7 +70,7 @@ class TerrestrialPlanet : public GenericObject {
       if (recompute_opacity)
       {
         calcChemistry();
-        atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
+        calcAtmosphereStructure();
         opacity.calculate();
       }
       RadiativeBoundaryConditions bc;
@@ -241,15 +93,12 @@ class TerrestrialPlanet : public GenericObject {
       const double flux_scale = std::max(1.0,
         aux::quadratureTrapezoidal(spectral_grid->wavenumber_list, stellar_flux) * zenith_angle);
 
-      // ---- temperature-correction scheme, selected by config string (see
+      // ---- temperature-correction scheme, selected by the solver spec (see
       //      select_temperature_correction.h and doc/temperature_correction_schemes.tex).
       TemperatureCorrectionSetup tc_setup;
       tc_setup.target_flux             = target_flux;
       // LIN_NO_CONV (debug) forces a pure-radiative run -- a clean test bed for the solvers.
       tc_setup.convection              = std::getenv("LIN_NO_CONV") ? nullptr : convection.get();
-      tc_setup.max_change_per_iteration= max_change_per_iteration;
-      tc_setup.iteration_gamma         = iteration_gamma;
-      tc_setup.lre_fraction            = lre_fraction;
       tc_setup.flux_scale              = flux_scale;
       // surface-anchored: the troposphere is slaved to lv 0 (= the surface), which keeps its flux row
       // so F_net[0]=0 (the surface balance) is enforced.
@@ -257,7 +106,7 @@ class TerrestrialPlanet : public GenericObject {
       tc_setup.mask_band               = 2;   // terrestrial runs at Delta tau <~ 1: placement-insensitive
 
       std::unique_ptr<TemperatureCorrection> temp_correction =
-        selectTemperatureCorrection(temperature_correction, temperature_correction_parameters, tc_setup);
+        selectTemperatureCorrection(solver, tc_setup);
 
       // Both callbacks are installed unconditionally; each corrector uses the one it needs (the base
       // class declares the others as no-ops). FULL eval: temperatures in, flux AND net heating out,
@@ -271,7 +120,7 @@ class TerrestrialPlanet : public GenericObject {
           if (recompute_opacity)
           {
             calcChemistry();
-            atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
+            calcAtmosphereStructure();
             opacity.calculate();
           }
           RadiativeBoundaryConditions bc;
@@ -294,7 +143,7 @@ class TerrestrialPlanet : public GenericObject {
         {
           atmosphere.temperature = T;
           calcChemistry();
-          atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
+          calcAtmosphereStructure();
           opacity.calculate();
           RadiativeBoundaryConditions bc;
           bc.incident_flux = stellar_flux;
@@ -310,13 +159,15 @@ class TerrestrialPlanet : public GenericObject {
 
       radiation_field.compute_jacobian = temp_correction->requiresRadiationJacobian();
 
-      NgAccelerator ng(ng_interval);
+      NgAccelerator ng(solver.ng_interval);
 
-      std::cout << "\n--- Starting iteration loop (terrestrial planet) ---\n"
-                << "  max iterations:        " << max_iterations << "\n"
-                << "  convergence threshold: " << convergence_threshold << "\n"
-                << "  Ng acceleration:       every " << ng_interval << " iterations"
-                << (ng_interval == 0 ? " (disabled)" : "") << "\n"
+      std::cout << std::defaultfloat << std::setprecision(6)
+                << "\n--- Starting iteration loop (terrestrial planet) ---\n"
+                << "  solver:                " << solver.scheme_name << "\n"
+                << "  max iterations:        " << solver.max_iterations << "\n"
+                << "  convergence threshold: " << solver.convergence_threshold << "\n"
+                << "  Ng acceleration:       every " << solver.ng_interval << " iterations"
+                << (solver.ng_interval == 0 ? " (disabled)" : "") << "\n"
                 << "  zenith angle (cos):    " << zenith_angle << "\n\n" << std::fixed;
 
       std::cout << "  " << std::setw(5) << "iter"
@@ -331,16 +182,16 @@ class TerrestrialPlanet : public GenericObject {
                 << "  " << std::setw(6) << "N_conv"
                 << "\n";
 
-      for (size_t iter = 0; iter < max_iterations; ++iter)
+      for (size_t iter = 0; iter < solver.max_iterations; ++iter)
       {
         std::vector<double> old_temperature = atmosphere.temperature;
-        
+
         // 1. Chemistry
         calcChemistry();
 
         // 2. Atmosphere structure (density, altitude, scale height)
-        atmosphere.calcAtmosphereStructure(surface_gravity, 0, false);
-        
+        calcAtmosphereStructure();
+
         // 3. Opacities
         opacity.calculate();
 
@@ -351,7 +202,7 @@ class TerrestrialPlanet : public GenericObject {
         bc.surface_albedo = surface->getAlbedo();
         bc.surface_temperature = surface->temperature;
         bc.has_surface = true;
-        
+
         // 5. Radiative transfer (trial evaluations in the corrector leave compute_jacobian off,
         //    so re-arm it here for the base solve that the temperature Jacobian is taken from)
         radiation_field.compute_jacobian = temp_correction->requiresRadiationJacobian();
@@ -359,7 +210,7 @@ class TerrestrialPlanet : public GenericObject {
 
         // 6. Flux divergence
         radiation_field.calcFluxDivergence(atmosphere.pressure);
-        
+
         // 7. Temperature correction (target_flux = 0: corrects all levels, no anchoring)
         temp_correction->calcCorrection(
           surface_gravity, atmosphere, radiation_field, opacity);
@@ -375,21 +226,9 @@ class TerrestrialPlanet : public GenericObject {
           shapiroFilter(atmosphere.temperature, 0.25);
         }
 
-        // 9. Limit maximum temperature change per iteration. Skipped when the corrector sets its own
-        // step (NLEQ-ERR): an independent per-level clip here breaks the adiabat slaving (it would clip
-        // a convective layer differently from its surface anchor) -> a deep-layer bang-bang oscillation.
-        if (max_change_per_iteration > 0 && !temp_correction->managesOwnStepSize())
-        {
-          for (size_t i = 0; i < atmosphere.temperature.size(); ++i)
-          {
-            const double dT = atmosphere.temperature[i] - old_temperature[i];
-            const double limit = max_change_per_iteration * old_temperature[i];
+        // 9. Limit maximum temperature change per iteration (relaxation schemes only)
+        limitTemperatureChange(old_temperature, *temp_correction);
 
-            if (std::abs(dT) > limit)
-              atmosphere.temperature[i] = old_temperature[i] + std::copysign(limit, dT);
-          }
-        }
-        
         // 10./11. Convective adjustment and Ng acceleration are RELAXATION-corrector machinery. A
         // Newton-type corrector handles convection internally (zone slaving) and self-converges, and
         // BOTH of these edit the committed profile AFTER the solve -- the post-hoc-mutation failure
@@ -446,7 +285,7 @@ class TerrestrialPlanet : public GenericObject {
 
         // converge on the corrector's flux residual when it provides one (linearisation), else |dT/T|
         const bool converged = (lin_resid >= 0.0)
-          ? (lin_resid < convergence_threshold) : (max_change < convergence_threshold);
+          ? (lin_resid < solver.convergence_threshold) : (max_change < solver.convergence_threshold);
         if (converged)
         {
           std::cout << "\n  Converged after " << iter + 1 << " iterations.\n" << std::endl;
@@ -455,40 +294,20 @@ class TerrestrialPlanet : public GenericObject {
       }
 
       std::cout << "\n  Warning: did not converge after "
-                << max_iterations << " iterations.\n" << std::endl;
+                << solver.max_iterations << " iterations.\n" << std::endl;
       return false;
     }
 
+  protected:
+    // the surface starts at the bottom-of-atmosphere temperature
+    void onInitialized() override { surface->temperature = atmosphere.temperature[0]; }
+    double defaultZenithAngle() const override { return zenith_angle; }
+
   private:
-    double surface_gravity;
     double zenith_angle;
     std::unique_ptr<StellarSpectrum> stellar_spectrum;
     std::vector<double> stellar_flux;
     std::unique_ptr<GenericSurface> surface;
-
-    std::vector<double> chemistry_parameters;
-
-    size_t max_iterations;
-    double convergence_threshold;
-    double iteration_gamma;
-    size_t ng_interval;
-    double lre_fraction;
-    double max_change_per_iteration;
-    std::string temperature_correction = "ratio_ul";
-    std::vector<std::string> temperature_correction_parameters;
-
-    void calcChemistry()
-    {
-      for (auto& chem : chemistry)
-      {
-        chem->calcChemicalComposition(
-          chemistry_parameters,
-          atmosphere.temperature,
-          atmosphere.pressure,
-          atmosphere.number_densities,
-          atmosphere.mean_molecular_weight);
-      }
-    }
 };
 
 

@@ -42,8 +42,8 @@ class FileNotFound : public std::runtime_error {
 class InvalidInput : public std::runtime_error {
   public:
     InvalidInput(
-      const std::string where, 
-      const std::string what) : std::runtime_error("Critical Error - Aborting!") {
+      const std::string where,
+      const std::string what) : std::runtime_error("Invalid input in " + where + ": " + what) {
         std::cout << "Invalid input in " << where << ":\n" << what << "\n";
       }
 };

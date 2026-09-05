@@ -25,7 +25,6 @@
 #include <omp.h>
 
 
-#include "../config/global_config.h"
 #include "../additional/physical_const.h"
 #include "../spectral_grid/spectral_grid.h"
 #include "../chemistry/chem_species.h"

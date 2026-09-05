@@ -1,5 +1,5 @@
-#the executable
-ngam
+#the compiled python core
+pyngam/_pyngam*.so
 
 # build files from cmake
 build/*

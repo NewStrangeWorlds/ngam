@@ -1,14 +1,12 @@
-import sys
 import numpy as np
 
-sys.path.insert(0, "build")
 import pyngam
-from ngam_io import save_model, load_model_data
+from pyngam import save_model
 
 
 # --- Model configuration ---
 
-opacity_data_path = "/media/data/opacity_data/helios-k/"
+opacity_path = "/media/data/opacity_data/helios-k/"
 
 opacity_species = [
     ("N2",         "Rayleigh"),
@@ -20,97 +18,49 @@ opacity_species = [
     #("N2O",        "Molecules/14N2-16O__HITEMP2019_e2b"),
     ("CO2",        "Molecules/12C-16O2__CDSD_4000_e2b"),
     ("CO2-CIA",    "none"),
-    ("H2O-CIA",    "none")
+    ("H2O-CIA",    "none"),
 ]
-
-species_symbols = [s[0] for s in opacity_species]
-species_folders = [s[1] for s in opacity_species]
 
 
 # --- Build the model ---
 
-grid = pyngam.SpectralGrid(
-    opacity_data_path, "",
-    2, 5000.0,
-    0.15, 100.0)
+# Composite-Planck covering grid: points where the Planck functions between the coldest and the
+# deepest layer (and the star's) carry energy. Set temperature_max ~ the deepest layer T.
+grid = pyngam.SpectralGrid.covering(
+    opacity_path, wavelength_min=0.15, wavelength_max=100.0,
+    temperature_min=100.0, temperature_max=350.0, nb_temperatures=30,
+    nb_points=10000, stellar_temperature=5772.0, nb_points_stellar=10000)
 
-# grid = pyngam.SpectralGrid(
-#     opacity_data_path, "",
-#     3, 0.0,                  # mode 3 (covering); spectral_resolution unused
-#     0.15, 100.0,              # wavelength_min/max [µm]
-#     100.0, 350.0,           # covering T range: set max ≈ deepest layer T
-#     30,                       # cov_nb_temperatures: 0 → default ~500 K steps
-#     1000,                    # target number of points
-#     5772.0,                  # host-star T; 0.0 for a brown dwarf
-#     1000)                   # target_nb_points_stellar  (stellar)
-
-
-# Chemistry: isoprofile with prescribed mixing ratios.
-# The chemistry_parameters vector contains the volume mixing ratios
-# for each species in the order of species_data (see pyngam.species_symbols()).
-# Here we set up a simple H2/He dominated atmosphere with trace H2O and CO2.
-all_species = pyngam.species_symbols()
-mix_ratios = [0.0] * len(all_species)
-
-# set mixing ratios by species name
-composition = {
-    "CO2":  1e-6,
-    "O2":  0.2,
-    "H2O": 1e-4,
-    "N2": 1-0.2-1e-6,
-}
-chem_species = ["N2",  "CO2"]
-mix_ratios = [0.02, 0.98]  # H2, O2, H2O, N2
-
+# grid = pyngam.SpectralGrid.constant_resolution(
+#     opacity_path, resolution=5000.0, wavelength_min=0.15, wavelength_max=100.0)
 
 model = pyngam.TerrestrialPlanet(
-    spectral_grid=grid,
+    grid,
+    surface_gravity=980.0,             # cm/s^2
+    instellation=1361e3 * 0.5,         # erg/cm^2/s (solar constant, 0.5 for a fast rotator)
+    zenith_angle=0.5,                  # cos(60 deg) = global-average approximation
+    stellar_spectrum=("tabulated", dict(file="data/stellar_spectra/spectrum_sun.dat")),
+    surface=("simple", dict(albedo=0.3, wavelength_switch=2.0)),
+    # surface=("variable_albedo", dict(file="data/Earth/earth_spectral_surface_reflection.dat")),
     nb_grid_points=100,
-    atmos_boundary_pressures=[1, 1e-5],
-    cross_section_file_path=opacity_data_path,
-    opacity_species_symbol=species_symbols,
-    opacity_species_folder=species_folders,
-    use_clouds=False,
+    boundary_pressures=[1, 1e-5],      # bar: surface -> top
+    opacity_species=opacity_species,
     chemistry=[
-        ("fixed", ["data/Earth/earth_standard_composition.dat"]),
-        #("manabe_wetherald", []),   # overrides H2O with RH profile (RH0=0.77)
+        ("fixed", dict(file="data/Earth/earth_standard_composition.dat")),
+        # ("manabe_wetherald", dict(surface_rh=0.77)),   # overrides H2O with an RH profile
     ],
-    chemistry_parameters=mix_ratios,
-    rt_type="adding_doubling",
-    rt_params=["2"],
-    surface_gravity=980.0,       # cm/s^2 (~ Earth)
-    zenith_angle=0.5,            # cos(60 deg) = global average approximation
-    stellar_type="tabulated",
-    stellar_params=["data/stellar_spectra/spectrum_sun.dat"],   # stellar temperature in K (Sun)
-    instellation=1361e3*0.5,     # erg/cm^2/s (solar constant: 1361 W/m^2 * 1e3, 0.5 for fast rotator)
-    #surface_type="variable_albedo",       # variable: albedo from file
-    #surface_params=["data/Earth/earth_spectral_surface_reflection.dat"], 
-    surface_type="simple",       # variable: albedo from file
-    surface_params=["0.3", "2.0"],  #albedo file
-    max_iterations=100,
-    temperature_correction="ratio_ul",
-    convergence_threshold=1e-5,
-    iteration_gamma=0.2,
-    lre_fraction=0.1,
-    use_convective_adjustment=True,
-    min_convection_pressure = 1e-2,
-    convection_type="mlt_moist",
-    ng_interval=0,
-    max_change_per_iteration=0.1)
+    radiative_transfer=("adding_doubling", dict(nb_streams=2)),
+    convection=("mlt_moist", dict(min_pressure=1e-2)),
+    solver=("ratio_ul", dict(max_iterations=100, convergence_threshold=1e-5)))
 
+
+# --- Initialize ---
 
 # clima-style start: an adiabat from a guessed surface temperature up to a stratosphere floor,
 # integrated along the ACTIVE convection scheme's neutrality gradient (dry, moist, mlt...) reduced
 # by 2%, so every layer starts on the stable side of the scheme's own threshold. This is what lets
 # the MLT corrector skip its easy-start homotopy (doc/mlt_convection_design.md Sec. 10.6).
-
-model.initialize(
-    temperature_type="adiabat",
-    temperature_config=[],
-    temperature_parameters=[288.0, 160.0],   # T_surface, T_stratosphere floor
-    init_chemistry=[("fixed", ["data/Earth/earth_standard_composition.dat"])],
-    init_chemistry_parameters=mix_ratios
-    )
+model.initialize(("adiabat", dict(surface_temperature=288.0, stratosphere_temperature=160.0)))
 
 
 # --- Run ---
@@ -124,7 +74,6 @@ rf = model.radiation_field
 atm = model.atmosphere
 
 wavelengths = np.array(grid.wavelength_list)
-spectrum = np.array(rf.spectrum)
 flux_total = np.array(rf.flux_total)
 pressure = np.array(atm.pressure)
 temperature = np.array(atm.temperature)
@@ -140,12 +89,6 @@ print(f"\nNet flux at TOA: {flux_total[-1]:.4e} erg/cm2/s")
 print(f"Net flux at bottom: {flux_total[0]:.4e} erg/cm2/s")
 
 
-# --- Save ---
+# --- Save (the full configuration is stored in the file) ---
 
-save_model("output_earth.nc", model, grid, config={
-    "surface_gravity": 980.0,
-    "surface_albedo": 0.3,
-    "stellar_temperature": 5780.0,
-    "instellation": 1361e3,
-    "surface_temperature": model.surface_temperature,
-})
+save_model("output_earth.nc", model)

@@ -1,105 +1,70 @@
 /*
-* This file is part of the BeAR code (https://github.com/newstrangeworlds/BeAR).
-* Copyright (C) 2024 Daniel Kitzmann
+* This file is part of the ngam code.
+* Copyright (C) 2026 Daniel Kitzmann
 *
-* BeAR is free software: you can redistribute it and/or modify
+* ngam is free software: you can redistribute it and/or modify
 * it under the terms of the GNU General Public License as published by
 * the Free Software Foundation, either version 3 of the License, or
 * (at your option) any later version.
-*
-* BeAR is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
-*
-* You find a copy of the GNU General Public License in the main
-* BeAR directory under <LICENSE>. If not, see
-* <http://www.gnu.org/licenses/>.
 */
-
 
 #ifndef _select_radiative_transfer_h
 #define _select_radiative_transfer_h
 
-#include <vector>
-#include <string>
-#include <algorithm>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "radiative_transfer.h"
-
 #include "discrete_ordinate.h"
 #include "adding_doubling.h"
-#include "../additional/exceptions.h"
+#include "../config/module_params.h"
 
 
 namespace ngam {
 
-//definition of the different radiative transfer modules with an
-//identifier and a keyword to be located in the config file
+
+// Radiative-transfer solvers, selected by a module spec {type, named parameters}:
+//
+//   disort            discrete-ordinate solver
+//                     nb_streams    total number of streams, default 4
+//   adding_doubling   adding-doubling solver with analytic temperature Jacobians
+//                     nb_streams    quadrature points per hemisphere, default 2
 namespace rt_modules{
   enum id {disort, adding_doubling};
   const std::vector<std::string> description {"disort", "adding_doubling"};
+  const std::vector<std::string> description_short {"disort", "ad"};
 }
 
 
-
 inline std::unique_ptr<RadiativeTransfer> selectRadiativeTransfer(
-  const std::string rt_type,
-  const std::vector<std::string>& parameters,
+  const ModuleSpec& spec,
   const size_t nb_grid_points,
   SpectralGrid* spectral_grid)
 {
-  //find the corresponding radiative transfer module to the supplied "type" string
-  auto it = std::find(
-    rt_modules::description.begin(),
-    rt_modules::description.end(),
-    rt_type);
+  const auto module_id = static_cast<rt_modules::id>(resolveModuleType(
+    spec.type, rt_modules::description, rt_modules::description_short, "radiative_transfer"));
 
-
-  //no module is found
-  if (it == rt_modules::description.end())
-  {
-    std::string error_message = "Radiative transfer type " + rt_type + " unknown!\n";
-    throw InvalidInput(std::string ("forward_model.config"), error_message);
-  }
-
-
-  //get the id of the chosen module
-  rt_modules::id module_id = static_cast<rt_modules::id>(
-    std::distance(rt_modules::description.begin(),
-    it));
-
+  ParamReader reader(spec, "radiative_transfer");
+  std::unique_ptr<RadiativeTransfer> module;
 
   switch (module_id)
   {
     case rt_modules::disort :
-      if (parameters.size() != 1)
-      {
-        std::string error_message = "Discrete ordinate radiative transfer requires exactly one parameter (number of streams)!\n";
-        throw InvalidInput(std::string ("forward_model.config"), error_message);
-      }
-      return std::make_unique<DiscreteOrdinates>(
-        spectral_grid,
-        std::stoi(parameters[0]),
-        nb_grid_points);
+      module = std::make_unique<DiscreteOrdinates>(
+        spectral_grid, static_cast<int>(reader.getInt("nb_streams", 4)), nb_grid_points);
+      break;
 
     case rt_modules::adding_doubling :
-      if (parameters.size() != 1)
-      {
-        std::string error_message = "Adding-doubling radiative transfer requires exactly one parameter (number of quadrature points per hemisphere)!\n";
-        throw InvalidInput(std::string ("forward_model.config"), error_message);
-      }
-      return std::make_unique<AddingDoubling>(
-        spectral_grid,
-        std::stoi(parameters[0]),
-        nb_grid_points);
+      module = std::make_unique<AddingDoubling>(
+        spectral_grid, static_cast<int>(reader.getInt("nb_streams", 2)), nb_grid_points);
+      break;
   }
 
-  return nullptr;
+  reader.finish();
+  return module;
 }
 
 
 }
 #endif
-

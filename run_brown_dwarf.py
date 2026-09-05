@@ -1,14 +1,12 @@
-import sys
 import numpy as np
 
-sys.path.insert(0, "build")
 import pyngam
-from ngam_io import save_model, load_model_data
+from pyngam import save_model
 
 
 # --- Model configuration ---
 
-opacity_data_path = "/media/data/opacity_data/helios-k/"
+opacity_path = "/media/data/opacity_data/helios-k/"
 
 opacity_species = [
     ("CIA-H2-H2", "CIA/H2-H2"),
@@ -23,66 +21,34 @@ opacity_species = [
     ("CO2",        "Molecules/12C-16O2__CDSD_4000_e2b"),
 ]
 
-species_symbols = [s[0] for s in opacity_species]
-species_folders = [s[1] for s in opacity_species]
-
-model_config = dict(
-    effective_temperature=1000.0,
-    surface_gravity=10**4.5,
-    metallicity=1.0,
-    c_to_o_ratio=0.5,
-    bottom_radius=7.1492e9
-)
-
 
 # --- Build the model ---
 
-grid = pyngam.SpectralGrid(
-    opacity_data_path, "",
-    2, 1000.0,
-    0.3, 100.0)
+grid = pyngam.SpectralGrid.constant_resolution(
+    opacity_path, resolution=1000.0, wavelength_min=0.3, wavelength_max=100.0)
 
 model = pyngam.BrownDwarf(
-    spectral_grid=grid,
+    grid,
+    effective_temperature=1000.0,      # K
+    surface_gravity=10**4.5,           # cm/s^2
+    radius=7.1492e9,                   # cm (~ 1 R_Jup)
     nb_grid_points=100,
-    atmos_boundary_pressures=[1e2, 1e-6],
-    cross_section_file_path=opacity_data_path,
-    opacity_species_symbol=species_symbols,
-    opacity_species_folder=species_folders,
-    use_clouds=False,
-    chemistry=[("eq", ["fastchem_parameters.dat"])],
-    rt_type="disort",
-    rt_params=["4"],
-    use_variable_gravity=False,
-    max_iterations=200,
-    convergence_threshold=1e-5,
-    temperature_correction="ratio_ul",
-    iteration_gamma=0.5,
-    lre_fraction=0.5,
-    ng_interval=0,
-    use_convective_adjustment=True,
-    convection_type="mlt",
-    max_change_per_iteration=0.1,
-    **model_config)
+    boundary_pressures=[1e2, 1e-6],    # bar: bottom -> top
+    opacity_species=opacity_species,
+    chemistry=[("equilibrium", dict(parameter_file="fastchem_parameters.dat",
+                                    metallicity=1.0, c_to_o=0.5))],
+    radiative_transfer=("disort", dict(nb_streams=4)),
+    convection="mlt",
+    solver=("ratio_ul", dict(max_iterations=200, convergence_threshold=1e-5)))
 
 
 # --- Initialize ---
 
-# Option 1: Initialize from analytic profile + chemistry
-model.initialize(
-    temperature_type="milne",
-    temperature_config=[],
-    temperature_parameters=[1e-2, 1000.0],  # kappa_ross, T_eff (for Milne init)
-    init_chemistry=[("eq", ["fastchem_parameters.dat"])],
-    init_chemistry_parameters=[model_config["metallicity"], model_config["c_to_o_ratio"]])
+# Option 1: analytic profile (T_eff defaults to the model's effective temperature) + chemistry
+model.initialize(("milne", dict(kappa_ross=1e-2)))
 
-# Option 2: Restart from a saved file
-# ds = load_model_data("output.nc")
-# model.initialize_from_arrays(
-#     temperature=ds["temperature"].values.tolist(),
-#     number_densities=ds["number_densities"].values.tolist(),
-#     mean_molecular_weight=ds["mean_molecular_weight"].values.tolist())
-# ds.close()
+# Option 2: restart from a saved file
+# model.initialize_from_file("output_brown_dwarf.nc")
 
 
 # --- Run ---
@@ -96,7 +62,6 @@ rf = model.radiation_field
 atm = model.atmosphere
 
 wavelengths = np.array(grid.wavelength_list)
-spectrum = np.array(rf.spectrum)
 flux_total = np.array(rf.flux_total)
 pressure = np.array(atm.pressure)
 temperature = np.array(atm.temperature)
@@ -111,6 +76,6 @@ print(f"\nFlux at top: {flux_total[0]:.4e} erg/cm2/s")
 print(f"Flux at bottom: {flux_total[-1]:.4e} erg/cm2/s")
 
 
-# --- Save ---
+# --- Save (the full configuration is stored in the file) ---
 
-save_model("output.nc", model, grid, config=model_config)
+save_model("output_brown_dwarf.nc", model)

@@ -1,6 +1,6 @@
 clearvars;
 
-file_name = "output_brown_dwarf.nc";
+file_name = "output_ear.nc";
 
 % Load the data
 spectrum = ncread(file_name, 'spectrum');
@@ -13,8 +13,6 @@ loglog(wavelength, spectrum);
 
 set(gca, 'FontSize', 13);
 set(gca,'TickLabelInterpreter','latex');
-
-ylim([1e-2 inf]);
 
 
 xlabel("Wavelength ($\mu$m)",'Interpreter','latex');
