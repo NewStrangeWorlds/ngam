@@ -190,10 +190,14 @@ static const char* model_config_doc =
   "  convection          'mlt_dry' [default] / 'mlt_moist' ({alpha=1, min_pressure}),\n"
   "                      'dry' / 'moist' ({min_pressure, max_sweeps=10}), 'none'\n"
   "  solver              'ratio_ul' [default] / 'flux_divergence' / 'ptc' /\n"
-  "                      'time_stepping' / 'time_stepping_lre', with\n"
-  "                      {max_iterations=100, convergence_threshold=1e-4} for all and\n"
+  "                      'time_stepping' / 'time_stepping_lre' / 'helios', with\n"
+  "                      {max_iterations=100, convergence_threshold=1e-4} for all,\n"
   "                      {gamma, ng_interval, max_change, lre_fraction} for the\n"
-  "                      relaxation schemes (max_change also for ptc)\n"
+  "                      relaxation schemes (max_change also for ptc), and\n"
+  "                      {ng_interval=0, step_init=10, step_grow=1.1, step_shrink=1.5,\n"
+  "                      adapt_interval=20, step_exponent=0.1, max_step=500,\n"
+  "                      stencil='backward'|'centered'|'forward',\n"
+  "                      residual='flux'|'heating'} for helios\n"
   "A module spec is a type name, a (type, {parameters}) tuple, or a dict with a 'type' key.\n";
 
 

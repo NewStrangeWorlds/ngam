@@ -1,5 +1,6 @@
 #the compiled python core
 pyngam/_pyngam*.so
+pyngam/__pycache__/*
 
 # build files from cmake
 build/*

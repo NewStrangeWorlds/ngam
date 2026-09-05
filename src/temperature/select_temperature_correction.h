@@ -12,6 +12,7 @@
 #include "linearised_temperature_correction.h"
 #include "time_stepping_temperature.h"
 #include "time_stepping_lre_temperature.h"
+#include "helios_temperature.h"
 #include "../config/module_params.h"
 #include "../additional/exceptions.h"
 
@@ -33,6 +34,8 @@ namespace ngam {
 //   ptc               the legacy pseudo-transient-continuation flux Newton.
 //   time_stepping     explicit relaxation on the radiative heating.
 //   time_stepping_lre as above, blended with a local-radiative-equilibrium update.
+//   helios            HELIOS' pseudo-time relaxation: per-level adaptive step, nearly residual-blind
+//                     update dT = s_i sign(r) |r|^0.1, converged on the LOCAL flux imbalance.
 //
 // See doc/temperature_correction_schemes.tex for the mathematics and the measured comparison.
 //
@@ -42,14 +45,19 @@ namespace ngam {
 //                       ng_interval (10)  Ng acceleration every n iterations, 0 = off
 //                       max_change (0.1)  max relative temperature change per iteration, 0 = off
 //   time_stepping_lre   as time_stepping, plus lre_fraction (0.5)  weight of the LRE update
+//   helios              ng_interval (0), step_init (10 K), step_grow (1.1), step_shrink (1.5),
+//                       adapt_interval (20), step_exponent (0.1), max_step (500 K),
+//                       stencil ("backward" | "centered" | "forward")  flux-difference stencil;
+//                       backward (F[i-1]-F[i]) is the one that converges, see helios_temperature.h
+//                       residual ("flux" | "heating")  flux difference or local kappa(J-B) heating
 //   ptc                 max_change (0.1)
 //   ratio_ul, flux_divergence   no scheme parameters (Newton with its own step control)
 namespace temperature_correction_modules {
-  enum id {ratio_ul, flux_divergence, ptc, time_stepping, time_stepping_lre};
+  enum id {ratio_ul, flux_divergence, ptc, time_stepping, time_stepping_lre, helios};
   const std::vector<std::string> description {
-    "ratio_ul", "flux_divergence", "ptc", "time_stepping", "time_stepping_lre"};
+    "ratio_ul", "flux_divergence", "ptc", "time_stepping", "time_stepping_lre", "helios"};
   const std::vector<std::string> description_short {
-    "rce", "flux", "lin", "ts", "ts_lre"};
+    "rce", "flux", "lin", "ts", "ts_lre", "hel"};
 }
 
 
@@ -67,6 +75,16 @@ struct SolverSettings {
   double lre_fraction = 0.5;
   size_t ng_interval = 10;
   double max_change = 0.1;
+
+  // helios parameters (see helios_temperature.h)
+  double step_init = 10.0;
+  double step_grow = 1.1;
+  double step_shrink = 1.5;
+  size_t adapt_interval = 20;
+  double step_exponent = 0.1;
+  double max_step = 500.0;
+  std::string stencil = "backward";
+  std::string residual = "flux";
 };
 
 
@@ -100,6 +118,20 @@ inline SolverSettings parseSolverSettings(const ModuleSpec& spec)
     s.max_change = reader.getDouble("max_change", 0.1);
   else
     s.max_change = 0.0;
+
+  if (s.scheme == helios)
+  {
+    // HELIOS sets its own per-level step; Ng acceleration is available but off by default
+    s.ng_interval = static_cast<size_t>(reader.getInt("ng_interval", 0));
+    s.step_init = reader.getDouble("step_init", 10.0);
+    s.step_grow = reader.getDouble("step_grow", 1.1);
+    s.step_shrink = reader.getDouble("step_shrink", 1.5);
+    s.adapt_interval = static_cast<size_t>(reader.getInt("adapt_interval", 20));
+    s.step_exponent = reader.getDouble("step_exponent", 0.1);
+    s.max_step = reader.getDouble("max_step", 500.0);
+    s.stencil = reader.getString("stencil", "backward");
+    s.residual = reader.getString("residual", "flux");
+  }
 
   reader.finish();
   return s;
@@ -182,6 +214,12 @@ inline std::unique_ptr<TemperatureCorrection> selectTemperatureCorrection(
     case time_stepping :
       return std::make_unique<TimeSteppingTemperature>(
         -1.0, solver.gamma, setup.target_flux);
+
+    case helios :
+      return std::make_unique<HeliosTemperature>(
+        setup.target_flux, setup.flux_scale, solver.step_init, solver.step_grow,
+        solver.step_shrink, solver.adapt_interval, solver.step_exponent, solver.max_step,
+        solver.stencil, solver.residual);
   }
 
   return nullptr;

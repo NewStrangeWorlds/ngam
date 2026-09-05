@@ -105,6 +105,7 @@ set(LIB_SRC
   src/temperature/milne_solution_temperature.cpp
   src/temperature/time_stepping_temperature.cpp
   src/temperature/time_stepping_lre_temperature.cpp
+  src/temperature/helios_temperature.cpp
   src/temperature/linearised_temperature_correction.cpp
   src/temperature/clima_rce_correction.cpp
   src/convection/dry_adiabatic.cpp

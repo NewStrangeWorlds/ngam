@@ -58,7 +58,7 @@ examples, and `help(pyngam.BrownDwarf)` / `pyngam.model_config_doc` for the argu
 | `chemistry` (list)   | `equilibrium` {parameter_file, metallicity=1, c_to_o=0.5}; `isoprofile` {symbol: mixing ratio, ...}; `fixed` {file}; `manabe_wetherald` {surface_rh=0.77} |
 | `radiative_transfer` | `disort` {nb_streams=4}; `adding_doubling` {nb_streams=2} |
 | `convection`         | `mlt_dry`, `mlt_moist` {alpha=1, min_pressure}; `dry`, `moist` {min_pressure, max_sweeps=10}; `none` |
-| `solver`             | `ratio_ul` (default), `flux_divergence`, `ptc`, `time_stepping`, `time_stepping_lre`; all take {max_iterations=100, convergence_threshold=1e-4}; the relaxation schemes add {gamma, ng_interval, max_change, lre_fraction}; `ptc` adds {max_change} |
+| `solver`             | `ratio_ul` (default), `flux_divergence`, `ptc`, `time_stepping`, `time_stepping_lre`, `helios`; all take {max_iterations=100, convergence_threshold=1e-4}; the relaxation schemes add {gamma, ng_interval, max_change, lre_fraction}; `ptc` adds {max_change}; `helios` (HELIOS' per-level adaptive pseudo-time step, converged on the local flux imbalance) adds {ng_interval=0, step_init=10, step_grow=1.1, step_shrink=1.5, adapt_interval=20, step_exponent=0.1, max_step=500, stencil=backward/centered/forward, residual=flux/heating} |
 | `stellar_spectrum`   | `tabulated` {file}; `blackbody` {temperature} |
 | `surface`            | `blackbody`; `simple` {albedo, wavelength_switch}; `variable_albedo` {file} |
 | `initialize(profile)`| `adiabat` {surface_temperature, stratosphere_temperature}; `milne` {kappa_ross, effective_temperature=object's}; `const` {temperature}; `guillot` {kappa_ir, t_irr, gamma, t_int=object's, mode="isotropic"/"beam", f=0.25 / mu=zenith angle} |
