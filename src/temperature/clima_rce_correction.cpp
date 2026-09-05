@@ -758,7 +758,7 @@ void ClimaRCECorrection::calcCorrection(
   // (total-flux conservation is the physically meaningful diagnostic there).
   if (mlt && !ratio && !tikh_flux_mlt)
     throw std::runtime_error(
-      "MixingLengthConvection (convection_type=mlt*) requires the ratio_ul temperature "
+      "MixingLengthConvection (convection mlt_dry/mlt_moist) requires the ratio_ul temperature "
       "correction (measured: the flux_divergence pairing does not converge; use dry/moist "
       "there, or set CLIMA_TIKH>0 for the experimental regularised pairing)");
 

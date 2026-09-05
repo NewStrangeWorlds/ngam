@@ -27,19 +27,19 @@ namespace ngam {
 
 // Convection schemes, selected by a module spec {type, named parameters}:
 //
-//   mlt          smooth mixing-length convection (doc/mlt_convection_design.md). The DEFAULT;
-//                requires the ratio_ul temperature correction.
+//   mlt_dry      smooth mixing-length convection with the dry neutrality gradient
+//                (doc/mlt_convection_design.md). The DEFAULT; requires the ratio_ul solver.
 //                alpha          mixing length in scale heights, default 1 (the converged T(P) is
 //                               insensitive to it)
 //                min_pressure   no convection above this pressure [bar]; default set by the object
-//   mlt_moist    as mlt, with the moist (condensation-limited) neutrality gradient
+//   mlt_moist    as mlt_dry, with the moist (condensation-limited) neutrality gradient
 //   dry          hard dry-adiabatic adjustment (relaxation / flux_divergence / ptc schemes)
 //                min_pressure, max_sweeps (default 10)
 //   moist        hard moist-adiabatic adjustment; same parameters as dry
 //   none         no convection
 namespace convection_modules{
-  enum id {mlt, mlt_moist, dry, moist, none};
-  const std::vector<std::string> description {"mlt", "mlt_moist", "dry", "moist", "none"};
+  enum id {mlt_dry, mlt_moist, dry, moist, none};
+  const std::vector<std::string> description {"mlt_dry", "mlt_moist", "dry", "moist", "none"};
 }
 
 
@@ -58,7 +58,7 @@ inline std::unique_ptr<Convection> selectConvection(
 
   switch (module_id)
   {
-    case convection_modules::mlt :
+    case convection_modules::mlt_dry :
     case convection_modules::mlt_moist :
     {
       const double alpha = reader.getDouble("alpha", 1.0);

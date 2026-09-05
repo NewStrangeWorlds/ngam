@@ -37,9 +37,9 @@ using namespace ngam;
 // ---- module specs from Python objects -------------------------------------------------------
 //
 // A module spec can be written as
-//   "mlt"                                    a bare type name
-//   ("mlt", {"alpha": 1.0})                  a (type, parameters) tuple
-//   {"type": "mlt", "alpha": 1.0}            a dict with a "type" key (the config-file form)
+//   "mlt_dry"                                a bare type name
+//   ("mlt_dry", {"alpha": 1.0})              a (type, parameters) tuple
+//   {"type": "mlt_dry", "alpha": 1.0}        a dict with a "type" key (the config-file form)
 // Parameter values are passed to C++ as strings and converted/validated by the module selector.
 
 static std::string paramToString(const py::handle& value)
@@ -187,7 +187,7 @@ static const char* model_config_doc =
   "                        ('manabe_wetherald', {surface_rh=0.77})\n"
   "  radiative_transfer  ('disort', {nb_streams=4}) [default] or\n"
   "                      ('adding_doubling', {nb_streams=2})\n"
-  "  convection          'mlt' [default] / 'mlt_moist' ({alpha=1, min_pressure}),\n"
+  "  convection          'mlt_dry' [default] / 'mlt_moist' ({alpha=1, min_pressure}),\n"
   "                      'dry' / 'moist' ({min_pressure, max_sweeps=10}), 'none'\n"
   "  solver              'ratio_ul' [default] / 'flux_divergence' / 'ptc' /\n"
   "                      'time_stepping' / 'time_stepping_lre', with\n"

@@ -52,7 +52,7 @@ struct ModelConfig {
 
   std::vector<ModuleSpec> chemistry;                                 // applied in order
   ModuleSpec radiative_transfer {"disort", {{"nb_streams", "4"}}};
-  ModuleSpec convection {"mlt"};
+  ModuleSpec convection {"mlt_dry"};
   ModuleSpec solver {"ratio_ul"};
 };
 

@@ -40,7 +40,7 @@ model = pyngam.BrownDwarf(
     chemistry=[("equilibrium", dict(parameter_file="fastchem_parameters.dat",
                                     metallicity=1.0, c_to_o=0.5))],
     radiative_transfer=("disort", dict(nb_streams=4)),
-    convection="mlt",
+    convection="mlt_dry",
     solver=("ratio_ul", dict(max_iterations=200, convergence_threshold=1e-5)))
 
 model.initialize(("milne", dict(kappa_ross=1e-2)))     # or model.initialize_from_file("out.nc")
@@ -57,13 +57,13 @@ examples, and `help(pyngam.BrownDwarf)` / `pyngam.model_config_doc` for the argu
 |----------------------|----------------------|
 | `chemistry` (list)   | `equilibrium` {parameter_file, metallicity=1, c_to_o=0.5}; `isoprofile` {symbol: mixing ratio, ...}; `fixed` {file}; `manabe_wetherald` {surface_rh=0.77} |
 | `radiative_transfer` | `disort` {nb_streams=4}; `adding_doubling` {nb_streams=2} |
-| `convection`         | `mlt`, `mlt_moist` {alpha=1, min_pressure}; `dry`, `moist` {min_pressure, max_sweeps=10}; `none` |
+| `convection`         | `mlt_dry`, `mlt_moist` {alpha=1, min_pressure}; `dry`, `moist` {min_pressure, max_sweeps=10}; `none` |
 | `solver`             | `ratio_ul` (default), `flux_divergence`, `ptc`, `time_stepping`, `time_stepping_lre`; all take {max_iterations=100, convergence_threshold=1e-4}; the relaxation schemes add {gamma, ng_interval, max_change, lre_fraction}; `ptc` adds {max_change} |
 | `stellar_spectrum`   | `tabulated` {file}; `blackbody` {temperature} |
 | `surface`            | `blackbody`; `simple` {albedo, wavelength_switch}; `variable_albedo` {file} |
 | `initialize(profile)`| `adiabat` {surface_temperature, stratosphere_temperature}; `milne` {kappa_ross, effective_temperature=object's}; `const` {temperature}; `guillot` {kappa_ir, t_irr, gamma, t_int=object's, mode="isotropic"/"beam", f=0.25 / mu=zenith angle} |
 
-`convection` mlt/mlt_moist (the default) requires the `ratio_ul` solver; use `dry`/`moist`
+`convection` mlt_dry/mlt_moist (the default) requires the `ratio_ul` solver; use `dry`/`moist`
 with the other schemes.
 
 ### Spectral grids

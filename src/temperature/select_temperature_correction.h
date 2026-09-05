@@ -123,7 +123,7 @@ struct TemperatureCorrectionSetup {
 };
 
 
-// Flux-law convection (mlt/mlt_moist, the default) is consumed inside the ratio_ul corrector;
+// Flux-law convection (mlt_dry/mlt_moist, the default) is consumed inside the ratio_ul corrector;
 // every other scheme relies on the hard adjustment (applied by the driver or by internal
 // slaving), which a flux-law Convection deliberately does NOT perform. flux_divergence was
 // tried and measured NOT to converge with all levels free (its zone rows/slaving are
@@ -146,7 +146,7 @@ inline void checkSolverConvectionPairing(
       && solver.scheme != ratio_ul
       && !(solver.scheme == flux_divergence && tikh_active))
     throw InvalidInput(std::string("solver"),
-      "convection mlt/mlt_moist requires solver ratio_ul; "
+      "convection mlt_dry/mlt_moist requires solver ratio_ul; "
       "use convection dry/moist with the other schemes "
       "(or flux_divergence with CLIMA_TIKH>0 for the experimental regularised pairing)\n");
 }

@@ -170,6 +170,13 @@ class SpectralGrid(_pyngam.SpectralGrid):
 
 # --- model classes -----------------------------------------------------------------------------
 
+# defaults of the shared components in the compiled core (see ModelConfig in generic_object.h)
+_COMPONENT_DEFAULTS = {
+    "radiative_transfer": {"type": "disort", "nb_streams": 4},
+    "convection": {"type": "mlt_dry"},
+    "solver": {"type": "ratio_ul"},
+}
+
 def _wrap_model(kind, base):
     """Subclass a compiled model class so that it records its configuration."""
 
@@ -182,6 +189,9 @@ def _wrap_model(kind, base):
             self.config = {"type": kind}
             self.config.update(_model_kwargs_to_config(kwargs))
             self.config.setdefault("opacity_path", grid.opacity_path)
+            # record the compiled defaults of the omitted components for provenance
+            for key, default in _COMPONENT_DEFAULTS.items():
+                self.config.setdefault(key, dict(default))
 
         def initialize(self, profile, chemistry=None):
             """Initialise from an analytic profile spec (see the compiled docstring)."""

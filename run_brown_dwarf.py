@@ -38,7 +38,7 @@ model = pyngam.BrownDwarf(
     chemistry=[("equilibrium", dict(parameter_file="fastchem_parameters.dat",
                                     metallicity=1.0, c_to_o=0.5))],
     radiative_transfer=("disort", dict(nb_streams=4)),
-    convection="mlt",
+    convection="mlt_dry",
     solver=("ratio_ul", dict(max_iterations=200, convergence_threshold=1e-5)))
 
 

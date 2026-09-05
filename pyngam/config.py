@@ -16,7 +16,7 @@ A config file (TOML, YAML or JSON) is just the serialised form of the keyword ar
     opacity_species = [["H2O", "Molecules/1H2-16O__POKAZATEL_e2b"], ["CH4", "..."]]
     chemistry = [{type = "equilibrium", parameter_file = "fastchem_parameters.dat"}]
     radiative_transfer = {type = "disort", nb_streams = 4}
-    convection = "mlt"
+    convection = "mlt_dry"
     solver = {type = "ratio_ul", max_iterations = 200, convergence_threshold = 1e-5}
 
     [initial_profile]
