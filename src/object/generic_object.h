@@ -26,6 +26,7 @@
 #include "../additional/thermodynamic_data.h"
 #include "../chemistry/chemistry.h"
 #include "../chemistry/select_chemistry.h"
+#include "../atmosphere/eddy_diffusion.h"
 #include "../radiative_transfer/radiative_transfer.h"
 #include "../radiative_transfer/select_radiative_transfer.h"
 #include "../convection/convection.h"
@@ -53,6 +54,7 @@ struct ModelConfig {
   std::vector<ModuleSpec> chemistry;                                 // applied in order
   ModuleSpec radiative_transfer {"disort", {{"nb_streams", "4"}}};
   ModuleSpec convection {"mlt_dry"};
+  ModuleSpec kzz {"mlt"};                                          // eddy diffusion profile
   ModuleSpec solver {"ratio_ul"};
 };
 
@@ -85,6 +87,7 @@ class GenericObject {
           config.radiative_transfer, config.nb_grid_points, spectral_grid_)),
         convection(selectConvection(
           config.convection, default_min_convection_pressure, has_surface)),
+        eddy_diffusion(selectEddyDiffusion(config.kzz)),
         solver(parseSolverSettings(config.solver)),
         surface_gravity(surface_gravity_),
         bottom_radius(bottom_radius_),
@@ -92,6 +95,8 @@ class GenericObject {
     {
       if (config.chemistry.empty())
         throw InvalidInput("chemistry", "at least one chemistry module is required\n");
+
+      for (auto& c : chemistry) c->setSurfaceGravity(surface_gravity);
 
       checkSolverConvectionPairing(solver, convection.get());
     }
@@ -132,17 +137,25 @@ class GenericObject {
       else
       {
         own_modules = selectChemistryModules(init_chemistry_specs);
-        for (auto& c : own_modules) init_chemistry.push_back(c.get());
+        for (auto& c : own_modules)
+        {
+          c->setSurfaceGravity(surface_gravity);
+          init_chemistry.push_back(c.get());
+        }
       }
 
       auto runInitChemistry = [&]() {
+        updateKzz();
         for (auto* chem : init_chemistry)
+        {
+          chem->setKzz(atmosphere.kzz);
           chem->calcChemicalComposition(
             chem->parameters,
             atmosphere.temperature,
             atmosphere.pressure,
             atmosphere.number_densities,
             atmosphere.mean_molecular_weight);
+        }
       };
 
       ParamReader reader(profile, "initial_profile");
@@ -188,6 +201,7 @@ class GenericObject {
       }
 
       calcAtmosphereStructure();
+      updateKzz();
       onInitialized();
 
       std::cout << "\n  Initialized from " << profile.type << " temperature profile + chemistry.\n";
@@ -204,6 +218,7 @@ class GenericObject {
       atmosphere.mean_molecular_weight = mean_molecular_weight;
 
       calcAtmosphereStructure();
+      updateKzz();
       onInitialized();
 
       std::cout << "\n  Initialized from external arrays.\n";
@@ -222,6 +237,7 @@ class GenericObject {
     std::vector<std::unique_ptr<Chemistry>> chemistry;
     std::unique_ptr<RadiativeTransfer> radiative_transfer;
     std::unique_ptr<Convection> convection;
+    std::unique_ptr<EddyDiffusion> eddy_diffusion;
     SolverSettings solver;
 
     double surface_gravity;       // cm/s^2
@@ -236,8 +252,21 @@ class GenericObject {
     virtual double defaultProfileTemperature() const { return NAN; }   // T_eff / T_int
     virtual double defaultZenithAngle() const { return NAN; }
 
-    void calcChemistry()
+    // Recompute the eddy diffusion profile from the CURRENT (committed) atmosphere and hand it to
+    // the chemistry modules.
+    void updateKzz()
     {
+      atmosphere.kzz = eddy_diffusion->profile(atmosphere, convection.get(), surface_gravity);
+      for (auto& chem : chemistry) chem->setKzz(atmosphere.kzz);
+    }
+
+    // update_kzz: refresh Kzz first. The iteration loops do (once per outer iteration); the
+    // Newton trial evaluations do NOT -- Kzz is an operator-split (lagged) quantity there, like
+    // the composition itself in the RT Jacobian, so the corrector never sees Kzz(T) feedback.
+    void calcChemistry(const bool update_kzz = true)
+    {
+      if (update_kzz) updateKzz();
+
       for (auto& chem : chemistry)
         chem->calcChemicalComposition(
           chem->parameters,

@@ -119,7 +119,7 @@ class TerrestrialPlanet : public GenericObject {
           atmosphere.temperature = T;
           if (recompute_opacity)
           {
-            calcChemistry();
+            calcChemistry(/*update_kzz=*/false);
             calcAtmosphereStructure();
             opacity.calculate();
           }
@@ -142,7 +142,7 @@ class TerrestrialPlanet : public GenericObject {
         [this](const std::vector<double>& T, std::vector<double>& flux_out)
         {
           atmosphere.temperature = T;
-          calcChemistry();
+          calcChemistry(/*update_kzz=*/false);
           calcAtmosphereStructure();
           opacity.calculate();
           RadiativeBoundaryConditions bc;

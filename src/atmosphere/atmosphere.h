@@ -49,6 +49,7 @@ class Atmosphere {
     std::vector<double> mean_molecular_weight;
     std::vector< std::vector<double> > number_densities;
     std::vector<int> convective;
+    std::vector<double> kzz;          // eddy diffusion coefficient [cm^2/s], set by the object
 
     void calcAtmosphereStructure(
       const double surface_gravity,

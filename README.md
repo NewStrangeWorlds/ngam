@@ -55,9 +55,10 @@ examples, and `help(pyngam.BrownDwarf)` / `pyngam.model_config_doc` for the argu
 
 | keyword              | types and parameters |
 |----------------------|----------------------|
-| `chemistry` (list)   | `equilibrium` {parameter_file, metallicity=1, c_to_o=0.5}; `isoprofile` {symbol: mixing ratio, ...}; `fixed` {file}; `manabe_wetherald` {surface_rh=0.77} |
+| `chemistry` (list)   | `equilibrium` {parameter_file, metallicity=1, c_to_o=0.5}; `isoprofile` {symbol: mixing ratio, ...}; `fixed` {file}; `manabe_wetherald` {surface_rh=0.77}; `quench` {metallicity=1} (Zahnle & Marley 2014 quenching of CO/CH4/H2O, NH3/N2, HCN, CO2 with the model's `kzz`; list after `equilibrium`) |
 | `radiative_transfer` | `disort` {nb_streams=4}; `adding_doubling` {nb_streams=2} |
 | `convection`         | `mlt_dry`, `mlt_moist` {alpha=1, min_pressure}; `dry`, `moist` {min_pressure, max_sweeps=10}; `none` |
+| `kzz`                | `mlt` (default) {scaling=velocity\|flux, radiative=constant (default)\|power_law {slope: <0 grows upward for irradiated planets, >0 decays to min for self-luminous objects}\|fixed {value}, min=1e4, relax=0.5, tolerance=0.05}: Kzz from the mixing-length convection, extended above the radiative-convective boundary; `constant` {value}; `power_law` {value, pressure=1, slope}; all in cm²/s |
 | `solver`             | `ratio_ul` (default), `flux_divergence`, `ptc`, `time_stepping`, `time_stepping_lre`, `helios`; all take {max_iterations=100, convergence_threshold=1e-4}; the relaxation schemes add {gamma, ng_interval, max_change, lre_fraction}; `ptc` adds {max_change}; `helios` (HELIOS' per-level adaptive pseudo-time step, converged on the local flux imbalance) adds {ng_interval=0, step_init=10, step_grow=1.1, step_shrink=1.5, adapt_interval=20, step_exponent=0.1, max_step=500, stencil=backward/centered/forward, residual=flux/heating} |
 | `stellar_spectrum`   | `tabulated` {file}; `blackbody` {temperature} |
 | `surface`            | `blackbody`; `simple` {albedo, wavelength_switch}; `variable_albedo` {file} |

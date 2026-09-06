@@ -97,10 +97,12 @@ set(LIB_SRC
   src/radiative_transfer/discrete_ordinate.cpp
   src/radiative_transfer/adding_doubling.cpp
   src/atmosphere/atmosphere.cpp
+  src/atmosphere/eddy_diffusion.cpp
   src/chemistry/isoprofile_chemistry.cpp
   src/chemistry/fastchem_chemistry.cpp
   src/chemistry/fixed_chemistry.cpp
   src/chemistry/mw_humidity_chemistry.cpp
+  src/chemistry/quench_chemistry.cpp
   src/temperature/guillot_temperature.cpp
   src/temperature/milne_solution_temperature.cpp
   src/temperature/time_stepping_temperature.cpp

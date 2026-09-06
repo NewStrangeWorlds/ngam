@@ -41,6 +41,14 @@ class Chemistry{
       std::vector<double>& mean_molecular_weight) = 0;
     size_t nbParameters() {return nb_parameters;}
 
+    // Called by the owning object after construction. Only modules that need the gravity (e.g.
+    // the quench module's mixing timescale) override it.
+    virtual void setSurfaceGravity(const double) {}
+
+    // The model's eddy diffusion profile [cm^2/s, one value per level], passed by the owning object
+    // before every outer-iteration chemistry evaluation. Only modules that need it override this.
+    virtual void setKzz(const std::vector<double>&) {}
+
     // the module's own runtime parameters (e.g. metallicity and C/O for the equilibrium module,
     // the mixing ratios for the isoprofile module), set from its module spec at construction;
     // the objects pass these to calcChemicalComposition

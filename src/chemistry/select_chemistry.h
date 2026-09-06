@@ -20,6 +20,7 @@
 #include "isoprofile_chemistry.h"
 #include "fixed_chemistry.h"
 #include "mw_humidity_chemistry.h"
+#include "quench_chemistry.h"
 #include "../config/module_params.h"
 
 
@@ -38,10 +39,15 @@ namespace ngam {
 //                           file             path to the composition file (required)
 //   manabe_wetherald (mw)   Manabe & Wetherald relative-humidity H2O profile (overrides H2O)
 //                           surface_rh       surface relative humidity, default 0.77
+//   quench (q)              Zahnle & Marley (2014) quenching approximation for CO/CH4/H2O, NH3/N2,
+//                           HCN and CO2 in H2-dominated atmospheres; post-processes the composition
+//                           of the preceding modules (list it after `equilibrium`)
+//                           Kzz comes from the model's `kzz` option (eddy_diffusion.h)
+//                           metallicity      relative to solar, default 1 (should match `equilibrium`)
 namespace chemistry_modules{
-  enum id {iso, eq, fixed, mw_humidity};
-  const std::vector<std::string> description {"isoprofile", "equilibrium", "fixed", "manabe_wetherald"};
-  const std::vector<std::string> description_short {"iso", "eq", "fix", "mw"};
+  enum id {iso, eq, fixed, mw_humidity, quench};
+  const std::vector<std::string> description {"isoprofile", "equilibrium", "fixed", "manabe_wetherald", "quench"};
+  const std::vector<std::string> description_short {"iso", "eq", "fix", "mw", "q"};
 }
 
 
@@ -84,6 +90,10 @@ inline std::unique_ptr<Chemistry> selectChemistryModule(const ModuleSpec& spec)
 
     case chemistry_modules::mw_humidity :
       module = std::make_unique<ManabeWetherlandChemistry>(reader.getDouble("surface_rh", 0.77));
+      break;
+
+    case chemistry_modules::quench :
+      module = std::make_unique<QuenchChemistry>(reader.getDouble("metallicity", 1.0));
       break;
   }
 

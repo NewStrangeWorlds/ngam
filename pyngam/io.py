@@ -78,6 +78,8 @@ def save_model(filename, model, grid=None, attrs=None):
                 {"units": "amu", "long_name": "Mean molecular weight"}),
             "convective": (["grid_point"], np.array(atm.convective),
                 {"long_name": "Convective zone flag (1 = convective)"}),
+            "kzz": (["grid_point"], np.array(atm.kzz),
+                {"units": "cm2/s", "long_name": "Eddy diffusion coefficient"}),
 
             # 2D number densities (grid_point x species)
             "number_densities": (["grid_point", "species"],

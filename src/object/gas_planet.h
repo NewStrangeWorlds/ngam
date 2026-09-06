@@ -111,7 +111,7 @@ class GasPlanet : public GenericObject {
             atmosphere.temperature = T;
             if (recompute_opacity)          // true residual: composition + structure + opacity
             {
-              calcChemistry();
+              calcChemistry(/*update_kzz=*/false);
               calcAtmosphereStructure();
               opacity.calculate();
             }

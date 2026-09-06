@@ -54,6 +54,7 @@ Atmosphere::Atmosphere(
     std::vector<double>(constants::species_data.size(), 0.0));
 
   convective.assign(nb_grid_points, 0);
+  kzz.assign(nb_grid_points, 0.0);
 }
 
 

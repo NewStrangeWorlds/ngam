@@ -145,7 +145,8 @@ static ModelConfig makeModelConfig(
   const py::object& chemistry,
   const py::object& radiative_transfer,
   const py::object& convection,
-  const py::object& solver)
+  const py::object& solver,
+  const py::object& kzz)
 {
   ModelConfig config;
   config.nb_grid_points = nb_grid_points;
@@ -158,6 +159,7 @@ static ModelConfig makeModelConfig(
     radiative_transfer, ModelConfig().radiative_transfer, "radiative_transfer");
   config.convection = specOrDefault(convection, ModelConfig().convection, "convection");
   config.solver = specOrDefault(solver, ModelConfig().solver, "solver");
+  config.kzz = specOrDefault(kzz, ModelConfig().kzz, "kzz");
   return config;
 }
 
@@ -171,7 +173,8 @@ static ModelConfig makeModelConfig(
   py::arg("chemistry"), \
   py::arg("radiative_transfer") = py::none(), \
   py::arg("convection") = py::none(), \
-  py::arg("solver") = py::none()
+  py::arg("solver") = py::none(), \
+  py::arg("kzz") = py::none()
 
 static const char* model_config_doc =
   "Shared configuration (keyword-only):\n"
@@ -185,6 +188,7 @@ static const char* model_config_doc =
   "                        ('isoprofile', {symbol: mixing ratio, ...})\n"
   "                        ('fixed', {file})\n"
   "                        ('manabe_wetherald', {surface_rh=0.77})\n"
+  "                        ('quench', {metallicity=1})  Zahnle & Marley 2014 quenching\n"
   "  radiative_transfer  ('disort', {nb_streams=4}) [default] or\n"
   "                      ('adding_doubling', {nb_streams=2})\n"
   "  convection          'mlt_dry' [default] / 'mlt_moist' ({alpha=1, min_pressure}),\n"
@@ -198,6 +202,11 @@ static const char* model_config_doc =
   "                      adapt_interval=20, step_exponent=0.1, max_step=500,\n"
   "                      stencil='backward'|'centered'|'forward',\n"
   "                      residual='flux'|'heating'} for helios\n"
+  "  kzz                 eddy diffusion profile: 'mlt' [default] ({scaling='velocity'|'flux',\n"
+  "                      radiative='constant' [default] | 'power_law' (slope required; <0 grows\n"
+  "                      upward, irradiated planets; >0 decays to min, self-luminous) | 'fixed'\n"
+  "                      (value), min=1e4, relax=0.5, tolerance=0.05}),\n"
+  "                      ('constant', {value}), ('power_law', {value, pressure=1, slope})\n"
   "A module spec is a type name, a (type, {parameters}) tuple, or a dict with a 'type' key.\n";
 
 
@@ -215,11 +224,12 @@ static std::unique_ptr<BrownDwarf> make_brown_dwarf(
   const py::object& chemistry,
   const py::object& radiative_transfer,
   const py::object& convection,
-  const py::object& solver)
+  const py::object& solver,
+  const py::object& kzz)
 {
   const ModelConfig config = makeModelConfig(
     grid, nb_grid_points, boundary_pressures, opacity_path, opacity_species, use_clouds,
-    chemistry, radiative_transfer, convection, solver);
+    chemistry, radiative_transfer, convection, solver, kzz);
 
   return std::make_unique<BrownDwarf>(
     &grid, config, effective_temperature, surface_gravity, radius, variable_gravity);
@@ -243,11 +253,12 @@ static std::unique_ptr<GasPlanet> make_gas_planet(
   const py::object& chemistry,
   const py::object& radiative_transfer,
   const py::object& convection,
-  const py::object& solver)
+  const py::object& solver,
+  const py::object& kzz)
 {
   const ModelConfig config = makeModelConfig(
     grid, nb_grid_points, boundary_pressures, opacity_path, opacity_species, use_clouds,
-    chemistry, radiative_transfer, convection, solver);
+    chemistry, radiative_transfer, convection, solver, kzz);
 
   return std::make_unique<GasPlanet>(
     &grid, config, internal_temperature, surface_gravity, radius, variable_gravity,
@@ -270,11 +281,12 @@ static std::unique_ptr<TerrestrialPlanet> make_terrestrial_planet(
   const py::object& chemistry,
   const py::object& radiative_transfer,
   const py::object& convection,
-  const py::object& solver)
+  const py::object& solver,
+  const py::object& kzz)
 {
   const ModelConfig config = makeModelConfig(
     grid, nb_grid_points, boundary_pressures, opacity_path, opacity_species, use_clouds,
-    chemistry, radiative_transfer, convection, solver);
+    chemistry, radiative_transfer, convection, solver, kzz);
 
   return std::make_unique<TerrestrialPlanet>(
     &grid, config, surface_gravity, instellation, zenith_angle,
@@ -394,7 +406,8 @@ PYBIND11_MODULE(_pyngam, m) {
         .def_readonly("mass_density", &Atmosphere::mass_density)
         .def_readonly("mean_molecular_weight", &Atmosphere::mean_molecular_weight)
         .def_readonly("number_densities", &Atmosphere::number_densities)
-        .def_readonly("convective", &Atmosphere::convective);
+        .def_readonly("convective", &Atmosphere::convective)
+        .def_readonly("kzz", &Atmosphere::kzz);
 
     // ---- RadiativeTransferOutput ----
     py::class_<RadiativeTransferOutput>(m, "RadiativeTransferOutput")
