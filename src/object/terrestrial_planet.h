@@ -104,6 +104,7 @@ class TerrestrialPlanet : public GenericObject {
       // so F_net[0]=0 (the surface balance) is enforced.
       tc_setup.surface_anchored        = true;
       tc_setup.mask_band               = 2;   // terrestrial runs at Delta tau <~ 1: placement-insensitive
+      tc_setup.warm_start = warm_start;
 
       std::unique_ptr<TemperatureCorrection> temp_correction =
         selectTemperatureCorrection(solver, tc_setup);
@@ -284,6 +285,9 @@ class TerrestrialPlanet : public GenericObject {
                   << "\n";
 
         // converge on the corrector's flux residual when it provides one (linearisation), else |dT/T|
+        if (stalledIteration(max_change, (lin_resid >= 0.0) ? lin_resid : max_change))
+          return false;
+
         const bool converged = (lin_resid >= 0.0)
           ? (lin_resid < solver.convergence_threshold) : (max_change < solver.convergence_threshold);
         if (converged)

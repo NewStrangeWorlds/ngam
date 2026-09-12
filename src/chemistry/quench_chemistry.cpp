@@ -29,8 +29,8 @@ const std::vector<std::string> QuenchChemistry::family_names {
   "CO/CH4/H2O", "NH3/N2", "HCN", "CO2"};
 
 
-QuenchChemistry::QuenchChemistry(const double metallicity_)
-  : metallicity(metallicity_)
+QuenchChemistry::QuenchChemistry(const double metallicity_, const bool relax_quench_points_)
+  : metallicity(metallicity_), relax_quench_points(relax_quench_points_)
 {
   if (metallicity <= 0)
     throw InvalidInput("QuenchChemistry", "metallicity must be positive\n");
@@ -102,6 +102,29 @@ double QuenchChemistry::logChemicalTimescale(
 
 
 
+double QuenchChemistry::relaxQuenchPressure(const family f, const double p_new)
+{
+  if (!relax_quench_points) return p_new;
+  if (relaxation.size() != nb_families) relaxation.assign(nb_families, Relaxation());
+  Relaxation& r = relaxation[f];
+  const double x_new = std::log(p_new);
+
+  if (!r.valid) { r.log_p = x_new; r.residual_prev = 0.0; r.weight = 0.5; r.valid = true; return p_new; }
+
+  const double res = x_new - r.log_p;
+  if (std::abs(res) < relax_dead_band * std::log(10.0)) return std::exp(r.log_p);   // dead band
+
+  // Aitken (scalar): weight <- -weight * r_prev (r - r_prev) / (r - r_prev)^2
+  const double dr = res - r.residual_prev;
+  if (r.residual_prev != 0.0 && dr != 0.0)
+    r.weight = std::min(1.0, std::max(0.05, -r.weight * r.residual_prev * dr / (dr * dr)));
+  r.residual_prev = res;
+  r.log_p += r.weight * res;
+  return std::exp(r.log_p);
+}
+
+
+
 bool QuenchChemistry::findQuenchPoint(
   const family f,
   const std::vector<double>& temperature,
@@ -158,7 +181,7 @@ bool QuenchChemistry::findQuenchPoint(
 
 
 
-void QuenchChemistry::freezeProfile(
+double QuenchChemistry::freezeProfile(
   const std::vector<double>& pressure,
   const double quench_pressure,
   const size_t first_quenched_level,
@@ -186,6 +209,8 @@ void QuenchChemistry::freezeProfile(
 
   for (size_t i = first_quenched_level; i < mixing_ratio.size(); ++i)
     mixing_ratio[i] = frozen_value;
+
+  return frozen_value;
 }
 
 
@@ -247,29 +272,57 @@ bool QuenchChemistry::calcChemicalComposition(
     }
   };
 
-  // --- CO/CH4/H2O, NH3/N2, HCN: freeze the equilibrium mixing ratios above the quench point ---
-  // (CO2 comes last: its quasi-equilibrium needs the QUENCHED CO and H2O)
   const std::vector<double> f_co_eq  = mixingRatio(_CO);
   const std::vector<double> f_h2o_eq = mixingRatio(_H2O);
   const std::vector<double> f_h2_eq  = f_h2;
 
+  // A lagged evaluation reapplies the committed quench state: the same first quenched level and
+  // frozen mixing ratios, on top of the trial equilibrium composition below the quench point.
+  const bool reapply = lagged && committed.size() == nb_families;
+  if (!reapply) committed.assign(nb_families, FamilyState());
+
+  // --- CO/CH4/H2O, NH3/N2, HCN: freeze the equilibrium mixing ratios above the quench point ---
+  // (CO2 comes last: its quasi-equilibrium needs the QUENCHED CO and H2O)
   for (const family f : {co_family, nh3_family, hcn_family})
   {
+    FamilyState& state = committed[f];
+
+    if (reapply)
+    {
+      if (!state.quenched) continue;
+      for (const auto& fs : state.frozen)
+      {
+        std::vector<double> f_species = mixingRatio(fs.id);
+        for (size_t i = state.first_level; i < nb_levels; ++i) f_species[i] = fs.value;
+        commit(fs.id, f_species);
+      }
+      continue;
+    }
+
     double p_q;
     size_t level_q;
 
     if (!findQuenchPoint(f, temperature, pressure, log_t_mix, p_q, level_q))
     {
       quench_pressures[f] = std::numeric_limits<double>::quiet_NaN();
+      if (relaxation.size() == nb_families) relaxation[f].valid = false;
       continue;
     }
 
+    p_q = relaxQuenchPressure(f, p_q);
+    level_q = 0;
+    while (level_q < nb_levels && pressure[level_q] > p_q) ++level_q;   // first level above p_q
+    if (level_q >= nb_levels) level_q = nb_levels - 1;
+
     quench_pressures[f] = p_q;
+    state.quenched = true;
+    state.first_level = level_q;
 
     for (const auto id : family_species[f])
     {
       std::vector<double> f_species = mixingRatio(id);
-      freezeProfile(pressure, p_q, level_q, f_species);
+      const double frozen = freezeProfile(pressure, p_q, level_q, f_species);
+      state.frozen.push_back({id, frozen});
       commit(id, f_species);
     }
   }
@@ -290,16 +343,35 @@ bool QuenchChemistry::calcChemicalComposition(
         f_co2[i] *= product / product_eq;
     }
 
-    double p_q;
-    size_t level_q;
+    FamilyState& state = committed[co2_family];
 
-    if (findQuenchPoint(co2_family, temperature, pressure, log_t_mix, p_q, level_q))
+    if (reapply)
     {
-      quench_pressures[co2_family] = p_q;
-      freezeProfile(pressure, p_q, level_q, f_co2);
+      if (state.quenched)
+        for (size_t i = state.first_level; i < nb_levels; ++i) f_co2[i] = state.frozen.front().value;
     }
     else
-      quench_pressures[co2_family] = std::numeric_limits<double>::quiet_NaN();
+    {
+      double p_q;
+      size_t level_q;
+
+      if (findQuenchPoint(co2_family, temperature, pressure, log_t_mix, p_q, level_q))
+      {
+        p_q = relaxQuenchPressure(co2_family, p_q);
+        level_q = 0;
+        while (level_q < nb_levels && pressure[level_q] > p_q) ++level_q;
+        if (level_q >= nb_levels) level_q = nb_levels - 1;
+        quench_pressures[co2_family] = p_q;
+        state.quenched = true;
+        state.first_level = level_q;
+        state.frozen.push_back({_CO2, freezeProfile(pressure, p_q, level_q, f_co2)});
+      }
+      else
+      {
+        quench_pressures[co2_family] = std::numeric_limits<double>::quiet_NaN();
+        if (relaxation.size() == nb_families) relaxation[co2_family].valid = false;
+      }
+    }
 
     commit(_CO2, f_co2);
   }
@@ -317,7 +389,7 @@ bool QuenchChemistry::calcChemicalComposition(
     mean_molecular_weight[i] += mu_correction[i];
   }
 
-  printDiagnostics();
+  if (!reapply) printDiagnostics();
 
   return false;
 }

@@ -1,6 +1,6 @@
 clearvars;
 
-file_name = "output_brown_dwarf.nc";
+file_name = "output_brown_dwarf_neovulcan.nc";
 
 % Load the data
 T   = ncread(file_name, 'temperature');

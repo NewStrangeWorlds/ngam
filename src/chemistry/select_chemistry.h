@@ -21,6 +21,7 @@
 #include "fixed_chemistry.h"
 #include "mw_humidity_chemistry.h"
 #include "quench_chemistry.h"
+#include "external_chemistry.h"
 #include "../config/module_params.h"
 
 
@@ -44,10 +45,13 @@ namespace ngam {
 //                           of the preceding modules (list it after `equilibrium`)
 //                           Kzz comes from the model's `kzz` option (eddy_diffusion.h)
 //                           metallicity      relative to solar, default 1 (should match `equilibrium`)
+//   external (ext)          composition supplied from the driver (Object::set_composition), e.g.
+//                           by a kinetics code; overwrites the supplied species, no-op until set.
+//                           List it last. No parameters.
 namespace chemistry_modules{
-  enum id {iso, eq, fixed, mw_humidity, quench};
-  const std::vector<std::string> description {"isoprofile", "equilibrium", "fixed", "manabe_wetherald", "quench"};
-  const std::vector<std::string> description_short {"iso", "eq", "fix", "mw", "q"};
+  enum id {iso, eq, fixed, mw_humidity, quench, external};
+  const std::vector<std::string> description {"isoprofile", "equilibrium", "fixed", "manabe_wetherald", "quench", "external"};
+  const std::vector<std::string> description_short {"iso", "eq", "fix", "mw", "q", "ext"};
 }
 
 
@@ -93,7 +97,12 @@ inline std::unique_ptr<Chemistry> selectChemistryModule(const ModuleSpec& spec)
       break;
 
     case chemistry_modules::quench :
-      module = std::make_unique<QuenchChemistry>(reader.getDouble("metallicity", 1.0));
+      module = std::make_unique<QuenchChemistry>(
+        reader.getDouble("metallicity", 1.0), reader.getBool("relax", true));
+      break;
+
+    case chemistry_modules::external :
+      module = std::make_unique<ExternalChemistry>();
       break;
   }
 

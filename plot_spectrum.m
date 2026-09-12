@@ -1,15 +1,22 @@
 clearvars;
 
-file_name = "output_brown_dwarf.nc";
+file_name = "output_gas.nc";
 
 % Load the data
 spectrum = ncread(file_name, 'spectrum');
 wavelength = ncread(file_name, 'wavelength');
 
 
+file_name = "output_gas_neovulcan.nc";
+
+% Load the data
+spectrum2 = ncread(file_name, 'spectrum');
+wavelength2 = ncread(file_name, 'wavelength');
+
+
 figure;
 
-loglog(wavelength, spectrum);
+loglog(wavelength, spectrum, wavelength2, spectrum2);
 
 set(gca, 'FontSize', 13);
 set(gca,'TickLabelInterpreter','latex');

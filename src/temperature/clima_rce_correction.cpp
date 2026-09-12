@@ -1230,9 +1230,19 @@ void ClimaRCECorrection::calcCorrection(
       // starts far from equilibrium and must WARM into its zone -- at full strength the Newton
       // bangs into the flux knee from below (measured: BD unconverged at 100 it with sf=1, vs 18
       // with the ramp). Ramp whenever target_flux > 0.
+      // warm_start (Object::compute(warm_start=True)): the profile IS a converged state (outer
+      // coupling loop), so the full-strength system starts at its root and the ramp is skipped.
+      // irradiation_dominated: an irradiated object whose internal flux is negligible against the
+      // stellar one (F_int < 1% of mu*S + F_int) has no deep zone to warm into either -- its
+      // stratification is set by the irradiation, and a stable-side start is near the answer as
+      // for a surface-driven troposphere. Measured on the warm Jupiter (T_int = 100 K, F_int/F ~
+      // 5e-5): the ramp pinned the residual at 0.5 for 12 iterations with N_conv = 0 throughout.
       constexpr double ramp_free_x = 0.02;
+      const bool irradiation_dominated =
+        irradiation_scale > 0.0 && target_flux < 1e-2 * irradiation_scale;
       mlt_sf_ = std::getenv("MLT_SF_INI") ? std::atof(std::getenv("MLT_SF_INI"))
-              : ((max_x0 < ramp_free_x && target_flux <= 0.0) ? 1.0 : mlt_sf_ini);
+              : ((warm_start || (max_x0 < ramp_free_x && (target_flux <= 0.0 || irradiation_dominated)))
+                 ? 1.0 : mlt_sf_ini);
       if (std::getenv("CLIMA_DBG"))
         std::fprintf(stderr, "  [mlt] init max_x=%.4f -> sf_ini=%.3e\n", max_x0, mlt_sf_);
     }
@@ -1854,6 +1864,9 @@ void ClimaRCECorrection::calcCorrection(
     const int    maxit = std::getenv("CLIMA_RATIO_MAXIT") ? std::atoi(std::getenv("CLIMA_RATIO_MAXIT")) : 50;
     const double xtol  = std::getenv("CLIMA_RATIO_XTOL")  ? std::atof(std::getenv("CLIMA_RATIO_XTOL"))  : 1e-7;
     constexpr double lambda_min = 1e-4;
+    const int max_floor_steps = std::getenv("CLIMA_FLOOR_STEPS") ? std::atoi(std::getenv("CLIMA_FLOOR_STEPS")) : 3;
+    int  floor_steps = 0;        // consecutive committed floor steps in this call
+    bool floor_step  = false;    // the step just committed was a floor step
 
     // affine-covariant scaled correction norm: RMS of dx[r] / T_scale[r].
     auto scaledNorm = [&](const std::vector<double>& v, const std::vector<double>& xc) {
@@ -2036,7 +2049,7 @@ void ClimaRCECorrection::calcCorrection(
           {
             // with CLIMA_TIKH the objective norm includes the penalty term
             const double n0 = augNorm2(g, x), n1 = augNorm2(gt, xt);
-            if (n1 <= n0) { lam_acc = lam; x_acc = xt; }
+            if (n1 <= n0) { lam_acc = lam; x_acc = xt; floor_step = true; }
           }
           break;
         }
@@ -2044,6 +2057,17 @@ void ClimaRCECorrection::calcCorrection(
       }
       if (lam_acc <= 0.0) break;                // no admissible step
       x = x_acc; lambda = lam_acc;
+      // Floor-step budget. A marginal residual decrease admits the floor step, but a Newton
+      // direction that is enormous along a nearly unconstrained mode (the deep-level mode of an
+      // irradiated planet with negligible internal flux: dx ~ 3e5 K at the bottom) then drifts the
+      // profile along that mode by lambda_min*dx per inner iteration -- measured on the warm
+      // Jupiter with the quench composition: 50 floor steps, +1702 K at the bottom in ONE outer
+      // call, from which the damped Newton never recovered. After `max_floor_steps` consecutive
+      // floor commits the inner solve returns; the outer loop then relinearises with recomputed
+      // opacities, which is the only thing that can change the direction.
+      if (floor_step) { if (++floor_steps >= max_floor_steps) break; }
+      else floor_steps = 0;
+      floor_step = false;
     }
     if (dbg)
     {

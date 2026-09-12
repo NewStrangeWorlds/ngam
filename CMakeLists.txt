@@ -66,6 +66,23 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(fastchem)
 
+# neoVULCAN (chemical kinetics, Python/JAX) for the kinetics coupling (pyngam.KineticsCoupling).
+# Not a CMake project: only fetched and its location compiled into the Python module. Override
+# with -DFETCHCONTENT_SOURCE_DIR_NEOVULCAN=/path/to/neoVULCAN to use a local checkout (as for the
+# other dependencies), or -DNGAM_FETCH_NEOVULCAN=OFF to skip it.
+option(NGAM_FETCH_NEOVULCAN "Fetch neoVULCAN for the kinetics coupling" ON)
+if(NGAM_FETCH_NEOVULCAN)
+  FetchContent_Declare(
+    neovulcan
+    GIT_REPOSITORY https://github.com/NewStrangeWorlds/neoVULCAN
+    GIT_TAG        3bc981b9c725171b6428ec361bba0972ef994760 # master: banded block-matrix solver + coupling API (set_composition, warm restart)
+  )
+  FetchContent_MakeAvailable(neovulcan)   # no CMakeLists.txt in neoVULCAN: fetch only
+  set(NGAM_NEOVULCAN_DIR "${neovulcan_SOURCE_DIR}")
+else()
+  set(NGAM_NEOVULCAN_DIR "")
+endif()
+
 find_package(OpenMP REQUIRED C CXX)
 
 if(BUILD_PYTHON_BINDINGS)
@@ -103,6 +120,7 @@ set(LIB_SRC
   src/chemistry/fixed_chemistry.cpp
   src/chemistry/mw_humidity_chemistry.cpp
   src/chemistry/quench_chemistry.cpp
+  src/chemistry/external_chemistry.cpp
   src/temperature/guillot_temperature.cpp
   src/temperature/milne_solution_temperature.cpp
   src/temperature/time_stepping_temperature.cpp
@@ -128,6 +146,7 @@ set_target_properties(ngam_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(BUILD_PYTHON_BINDINGS)
   pybind11_add_module(_pyngam src/python/bindings.cpp)
   target_link_libraries(_pyngam PRIVATE ngam_lib)
+  target_compile_definitions(_pyngam PRIVATE NGAM_NEOVULCAN_DIR="${NGAM_NEOVULCAN_DIR}")
   set_target_properties(_pyngam PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/pyngam)
   install(TARGETS _pyngam LIBRARY DESTINATION pyngam)

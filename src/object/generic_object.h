@@ -17,6 +17,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <iomanip>
 
 #include "../config/module_params.h"
 #include "../spectral_grid/spectral_grid.h"
@@ -103,6 +104,70 @@ class GenericObject {
     virtual ~GenericObject() {}
 
     virtual bool computeAtmosphericStructure() = 0;
+
+    // Iterate to equilibrium with per-call overrides. tolerance / max_iterations <= 0 keep the
+    // solver spec's values. warm_start: the current profile is (near) a converged state -- e.g.
+    // the previous pass of an outer coupling loop with a slightly changed composition -- so the
+    // corrector skips its easy-start homotopy (the MLT flux-law ramp), which otherwise costs
+    // ~15 iterations at every call for a self-luminous object.
+    bool compute(const double tolerance, const long max_iterations, const bool warm_start_)
+    {
+      const SolverSettings saved = solver;
+      if (tolerance > 0) solver.convergence_threshold = tolerance;
+      if (max_iterations > 0) solver.max_iterations = static_cast<size_t>(max_iterations);
+      warm_start = warm_start_;
+      stall_count = 0;
+      residual_history.clear();
+
+      bool converged = false;
+      try { converged = computeAtmosphericStructure(); }
+      catch (...) { solver = saved; warm_start = false; throw; }
+
+      solver = saved;
+      warm_start = false;
+      return converged;
+    }
+
+    // Enable or disable every chemistry module of the given type (selector name, e.g. "quench").
+    // Returns the number of modules affected. See Chemistry::enabled.
+    size_t setChemistryEnabled(const std::string& type, const bool enabled)
+    {
+      const auto id = static_cast<chemistry_modules::id>(resolveModuleType(
+        type, chemistry_modules::description, chemistry_modules::description_short, "chemistry"));
+      size_t n = 0;
+      for (auto& chem : chemistry)
+      {
+        const bool match =
+          (id == chemistry_modules::quench   && dynamic_cast<QuenchChemistry*>(chem.get()))
+       || (id == chemistry_modules::external && dynamic_cast<ExternalChemistry*>(chem.get()))
+       || (id == chemistry_modules::eq       && dynamic_cast<FastChemChemistry*>(chem.get()))
+       || (id == chemistry_modules::mw_humidity && dynamic_cast<ManabeWetherlandChemistry*>(chem.get()))
+       || (id == chemistry_modules::iso      && dynamic_cast<IsoprofileChemistry*>(chem.get()))
+       || (id == chemistry_modules::fixed    && dynamic_cast<FixedChemistry*>(chem.get()));
+        if (match) { chem->enabled = enabled; ++n; }
+      }
+      return n;
+    }
+
+    // Hand an externally computed composition to the `external` chemistry module(s); see
+    // external_chemistry.h. mixing_ratios[level][k] for symbols[k], on this model's grid.
+    void setExternalComposition(
+      const std::vector<std::string>& symbols,
+      const std::vector<std::vector<double>>& mixing_ratios)
+    {
+      bool found = false;
+      for (auto& chem : chemistry)
+        if (auto* ext = dynamic_cast<ExternalChemistry*>(chem.get()))
+        {
+          ext->setMixingRatios(symbols, mixing_ratios);
+          found = true;
+        }
+      if (!found)
+        throw InvalidInput("set_composition",
+          "the model has no \"external\" chemistry module; add (\"external\", {}) last in chemistry\n");
+      if (mixing_ratios.size() != atmosphere.pressure.size())
+        throw InvalidInput("set_composition", "mixing ratio table must have one row per grid level\n");
+    }
 
     // Initialise the atmosphere from an analytic temperature profile plus chemistry.
     //
@@ -243,6 +308,48 @@ class GenericObject {
     double surface_gravity;       // cm/s^2
     double bottom_radius;         // cm; 0 = plane-parallel with constant gravity
     bool use_variable_gravity;
+    bool warm_start = false;      // set by compute() for the duration of one call
+    size_t stall_count = 0;       // consecutive iterations without any temperature change
+
+    // Stagnation exit for the iteration loops. A Newton corrector that proposes NO change at all
+    // (|dT/T| below round-off) while the residual is still above the threshold has hit a floor it
+    // cannot pass -- measured on the coupled warm Jupiter: two passes sat at a flux residual of
+    // 1.4e-4 against a 1e-5 threshold with dT = 0 from iteration 16 to 100, an hour of wasted
+    // radiative transfer. Three such iterations in a row end the pass (returns true); the caller
+    // reports non-convergence, and an outer coupling loop simply carries on.
+    // Second stall signature (coupled warm Jupiter, 2026-09-08): the damped Newton stuck at its
+    // minimum damping, walking one level by ~2 K per iteration with the residual flat at 57 for
+    // 300 iterations across three passes. So a pass also ends when the residual has not improved
+    // by 1% over the last `stall_window` iterations. The window is longer than the MLT easy-start
+    // ramp, which legitimately holds the residual at its 0.5 floor for ~12 iterations.
+    static constexpr size_t stall_window = 25;
+    std::vector<double> residual_history;
+
+    bool stalledIteration(const double max_change, const double residual)
+    {
+      if (residual < solver.convergence_threshold)
+      { stall_count = 0; residual_history.clear(); return false; }
+
+      stall_count = (max_change < 1e-9) ? stall_count + 1 : 0;
+      residual_history.push_back(residual);
+
+      const bool zero_step = stall_count >= 3;
+      const bool no_progress = residual_history.size() >= stall_window
+        && residual > 0.99 * residual_history[residual_history.size() - stall_window];
+
+      if (!zero_step && !no_progress) return false;
+
+      std::cout << "\n  Stalled: "
+                << (zero_step ? "the corrector proposes no further temperature change"
+                              : "the residual has not improved by 1% over the last "
+                                + std::to_string(stall_window) + " iterations")
+                << " while the residual " << std::scientific << std::setprecision(4) << residual
+                << " stays above the threshold " << solver.convergence_threshold
+                << ". Stopping this pass.\n" << std::endl;
+      stall_count = 0;
+      residual_history.clear();
+      return true;
+    }
 
     // hook for derived classes after any initialisation (e.g. set the surface temperature)
     virtual void onInitialized() {}
@@ -268,7 +375,10 @@ class GenericObject {
       if (update_kzz) updateKzz();
 
       for (auto& chem : chemistry)
-        chem->calcChemicalComposition(
+        chem->setLagged(!update_kzz);
+
+      for (auto& chem : chemistry)
+        if (chem->enabled) chem->calcChemicalComposition(
           chem->parameters,
           atmosphere.temperature,
           atmosphere.pressure,

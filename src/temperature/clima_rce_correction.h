@@ -44,11 +44,15 @@ class ClimaRCECorrection : public TemperatureCorrection{
       const double target_flux_,
       const Convection* convection_,
       const int mask_band_ = 2,
-      const bool use_ratio_ = true)
+      const bool use_ratio_ = true,
+      const bool warm_start_ = false,
+      const double irradiation_scale_ = 0.0)
       : target_flux(target_flux_)
       , convection(convection_)
       , mask_band_default(mask_band_)
-      , use_ratio(use_ratio_) {}
+      , use_ratio(use_ratio_)
+      , warm_start(warm_start_)
+      , irradiation_scale(irradiation_scale_) {}
     virtual ~ClimaRCECorrection() {}
 
     // Uses DISORT's analytic Planck-only net-flux temperature Jacobian (= clima's frozen-opacity
@@ -70,6 +74,8 @@ class ClimaRCECorrection : public TemperatureCorrection{
     const double target_flux = 0.0;
     const Convection* convection = nullptr;
     const int mask_band_default = 2;    // RCB dead-band half-width (see constructor note)
+    const bool warm_start = false;      // skip the MLT easy-start ramp (converged start)
+    const double irradiation_scale = 0.0;   // mu*S + F_int of an irradiated object (0: self-luminous)
     const bool use_ratio = true;        // residual family (see constructor note)
 
     ForwardEvalFull forward_eval_full_ = nullptr;

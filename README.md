@@ -55,7 +55,7 @@ examples, and `help(pyngam.BrownDwarf)` / `pyngam.model_config_doc` for the argu
 
 | keyword              | types and parameters |
 |----------------------|----------------------|
-| `chemistry` (list)   | `equilibrium` {parameter_file, metallicity=1, c_to_o=0.5}; `isoprofile` {symbol: mixing ratio, ...}; `fixed` {file}; `manabe_wetherald` {surface_rh=0.77}; `quench` {metallicity=1} (Zahnle & Marley 2014 quenching of CO/CH4/H2O, NH3/N2, HCN, CO2 with the model's `kzz`; list after `equilibrium`) |
+| `chemistry` (list)   | `equilibrium` {parameter_file, metallicity=1, c_to_o=0.5}; `isoprofile` {symbol: mixing ratio, ...}; `fixed` {file}; `manabe_wetherald` {surface_rh=0.77}; `quench` {metallicity=1} (Zahnle & Marley 2014 quenching of CO/CH4/H2O, NH3/N2, HCN, CO2 with the model's `kzz`; list after `equilibrium`); `external` {} (composition handed in via `model.set_composition(species, mixing_ratios)`, e.g. from a kinetics code; list last) |
 | `radiative_transfer` | `disort` {nb_streams=4}; `adding_doubling` {nb_streams=2} |
 | `convection`         | `mlt_dry`, `mlt_moist` {alpha=1, min_pressure}; `dry`, `moist` {min_pressure, max_sweeps=10}; `none` |
 | `kzz`                | `mlt` (default) {scaling=velocity\|flux, radiative=constant (default)\|power_law {slope: <0 grows upward for irradiated planets, >0 decays to min for self-luminous objects}\|fixed {value}, min=1e4, relax=0.5, tolerance=0.05}: Kzz from the mixing-length convection, extended above the radiative-convective boundary; `constant` {value}; `power_law` {value, pressure=1, slope}; all in cm²/s |
@@ -66,6 +66,20 @@ examples, and `help(pyngam.BrownDwarf)` / `pyngam.model_config_doc` for the argu
 
 `convection` mlt_dry/mlt_moist (the default) requires the `ratio_ul` solver; use `dry`/`moist`
 with the other schemes.
+
+### Kinetics coupling (neoVULCAN)
+
+`pyngam.KineticsCoupling(model, chem, workdir=...)` alternates an ngam model whose chemistry list
+ends in `("external", {})` with a kinetics code exposing neoVULCAN's `VulcanChemistry` interface.
+neoVULCAN itself is fetched at configure time like the other dependencies (commit pinned in
+CMakeLists.txt; `-DFETCHCONTENT_SOURCE_DIR_NEOVULCAN=<checkout>` uses a local one,
+`-DNGAM_FETCH_NEOVULCAN=OFF` skips it) and loaded with `pyngam.load_vulcan(config_path)`.
+Each pass solves the RCE with the composition frozen, hands T, p and Kzz to the kinetics code on
+its own grid, runs it to steady state (warm-started), and commits the returned mixing ratios with
+Aitken relaxation and a dead band. The RCE tolerance tightens by a decade per pass. Use
+`[equilibrium, quench, external]` so the quench approximation seeds the kinetics. See
+`run_brown_dwarf_neovulcan.py` (thermal kinetics) and `run_gas_neovulcan.py` (irradiated planet with
+photochemistry) with their neoVULCAN configurations in `configs/`.
 
 ### Spectral grids
 

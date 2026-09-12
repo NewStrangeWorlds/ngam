@@ -63,7 +63,7 @@ namespace ngam {
 // metallicity, without photochemistry. The module refuses to run if there is no H2.
 class QuenchChemistry : public Chemistry{
   public:
-    QuenchChemistry(const double metallicity_);
+    QuenchChemistry(const double metallicity_, const bool relax_quench_points_ = true);
     virtual ~QuenchChemistry() {}
 
     virtual bool calcChemicalComposition(
@@ -78,6 +78,15 @@ class QuenchChemistry : public Chemistry{
     // The model's Kzz profile (cm^2/s, one value per level; see EddyDiffusion). Required.
     virtual void setKzz(const std::vector<double>& kzz_profile) { kzz = kzz_profile; }
 
+    // Inside the corrector's trial evaluations the quench points and frozen mixing ratios of the
+    // last committed evaluation are reapplied instead of being re-derived from the trial T, so the
+    // quench point cannot move between the residual and the Jacobian that linearises it. NOTE:
+    // the ratio_ul corrector does not recompute chemistry in its trial evaluations at all, so this
+    // only matters for correctors that do (the true-residual evaluations of the affine-covariant
+    // schemes); it did NOT cure the warm-Jupiter stall it was written for (2026-09-08), whose
+    // cause is the first Newton step from a cold Guillot start with the quench composition.
+    virtual void setLagged(const bool lagged_) { lagged = lagged_; }
+
     // Quench pressures (bar) of the last evaluation, one per family in the order
     // CO/CH4/H2O, NH3/N2, HCN, CO2; NaN = the family did not quench inside the grid.
     const std::vector<double>& quenchPressures() const { return quench_pressures; }
@@ -87,6 +96,7 @@ class QuenchChemistry : public Chemistry{
     static const std::vector<std::string> family_names;
 
     double metallicity;     // relative to solar
+    bool relax_quench_points;   // Aitken relaxation of the quench pressures between evaluations
 
     double surface_gravity = 0;                 // cm/s^2, set by the owning object
     std::vector<double> kzz;                    // cm^2/s per level, set by the owning object
@@ -94,6 +104,26 @@ class QuenchChemistry : public Chemistry{
     std::vector<double> quench_pressures;
     std::vector<double> printed_quench_pressures;   // for rate-limited diagnostics
     bool warned_below_grid = false;
+
+    // committed quench state, reapplied while lagged
+    struct FrozenSpecies { chemical_species_id id; double value; };
+    struct FamilyState { bool quenched = false; size_t first_level = 0; std::vector<FrozenSpecies> frozen; };
+    std::vector<FamilyState> committed;   // one per family; empty until the first full evaluation
+    bool lagged = false;
+
+    // Relaxation of the quench pressures between outer evaluations (Aitken on ln p_q per family,
+    // with a dead band). The outer loop "solve T for a frozen composition, then move the quench
+    // points" is a Picard iteration whose gain exceeds one where the quench point sits at the
+    // CO/CH4 transition of the photosphere: measured on the warm Jupiter, the CO quench pressure
+    // flipped 2 <-> 11 bar and one level swung +-184 K every outer iteration, indefinitely. Same
+    // remedy as for the self-consistent Kzz (atmosphere/eddy_diffusion.h).
+    struct Relaxation { double log_p = 0.0; double residual_prev = 0.0; double weight = 0.5; bool valid = false; };
+    std::vector<Relaxation> relaxation;   // one per family
+    static constexpr double relax_dead_band = 0.02;   // dex in the quench pressure
+
+    // Relax a freshly derived quench pressure against the committed one; returns the pressure to
+    // use (and records it). A family that stops quenching resets its state.
+    double relaxQuenchPressure(const family f, const double p_new);
 
     std::vector<double> mixingTimescale(
       const std::vector<double>& temperature,
@@ -113,8 +143,9 @@ class QuenchChemistry : public Chemistry{
       double& quench_pressure,
       size_t& first_quenched_level);
 
-    // Freeze a mixing-ratio profile above the quench pressure at its value interpolated there.
-    static void freezeProfile(
+    // Freeze a mixing-ratio profile above the quench pressure at its value interpolated there;
+    // returns the frozen value.
+    static double freezeProfile(
       const std::vector<double>& pressure,
       const double quench_pressure,
       const size_t first_quenched_level,

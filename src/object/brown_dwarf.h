@@ -56,6 +56,7 @@ class BrownDwarf : public GenericObject {
       // mask_band = 0: this object's radiative band runs at Delta tau >> 1, where the collocated
       // residual is Nyquist-degenerate and a one-level RCB placement error locks in a checkerboard.
       tc_setup.mask_band                = 0;
+      tc_setup.warm_start = warm_start;
 
       std::unique_ptr<TemperatureCorrection> temp_correction =
         selectTemperatureCorrection(solver, tc_setup);
@@ -200,6 +201,9 @@ class BrownDwarf : public GenericObject {
                   << "\n";
 
         // converge on the corrector's flux residual when it provides one, else on |dT/T|.
+        if (stalledIteration(max_change, (lin_resid >= 0.0) ? lin_resid : max_change))
+          return false;
+
         const bool converged = (lin_resid >= 0.0)
           ? (lin_resid < solver.convergence_threshold)
           : (max_change < solver.convergence_threshold);

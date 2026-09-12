@@ -189,6 +189,7 @@ static const char* model_config_doc =
   "                        ('fixed', {file})\n"
   "                        ('manabe_wetherald', {surface_rh=0.77})\n"
   "                        ('quench', {metallicity=1})  Zahnle & Marley 2014 quenching\n"
+  "                        ('external', {})  composition set via model.set_composition\n"
   "  radiative_transfer  ('disort', {nb_streams=4}) [default] or\n"
   "                      ('adding_doubling', {nb_streams=2})\n"
   "  convection          'mlt_dry' [default] / 'mlt_moist' ({alpha=1, min_pressure}),\n"
@@ -327,8 +328,22 @@ static void defineObjectMethods(py::class_<Object>& cls)
       py::arg("number_densities"),
       py::arg("mean_molecular_weight"),
       "Initialize from saved temperature, number densities, and mean molecular weight arrays")
-    .def("compute", &Object::computeAtmosphericStructure,
-      "Iterate to radiative-convective equilibrium; returns True on convergence")
+    .def("compute", &Object::compute,
+      py::arg("tolerance") = 0.0, py::arg("max_iterations") = 0, py::arg("warm_start") = false,
+      "Iterate to radiative-convective equilibrium; returns True on convergence.\n"
+      "tolerance / max_iterations override the solver spec for this call (<= 0: keep).\n"
+      "warm_start=True: the current profile is a converged state (e.g. the previous pass of a\n"
+      "coupling loop), so the corrector skips its easy-start ramp.")
+    .def("set_chemistry_enabled", &Object::setChemistryEnabled,
+      py::arg("type"), py::arg("enabled"),
+      "Enable/disable the chemistry modules of the given type (e.g. 'quench'); returns how many\n"
+      "modules were affected. A disabled module passes the composition through.")
+    .def("set_composition", &Object::setExternalComposition,
+      py::arg("species"), py::arg("mixing_ratios"),
+      "Hand a composition to the 'external' chemistry module: species symbols and a table\n"
+      "mixing_ratios[level][k] on this model's pressure grid (index 0 = bottom). Unknown symbols\n"
+      "are ignored; the supplied species are rescaled per level to the budget the preceding\n"
+      "modules gave them, everything else is left untouched.")
     .def_readonly("radiation_field", &Object::radiation_field)
     .def_property_readonly("atmosphere", &Object::getAtmosphere);
 }
@@ -339,6 +354,12 @@ PYBIND11_MODULE(_pyngam, m) {
 
     m.def("species_symbols", &get_species_symbols,
         "Return the list of all chemical species symbols (indexed by species ID)");
+
+#ifndef NGAM_NEOVULCAN_DIR
+#define NGAM_NEOVULCAN_DIR ""
+#endif
+    // directory of the neoVULCAN checkout fetched at configure time ("" if not fetched)
+    m.attr("neovulcan_dir") = NGAM_NEOVULCAN_DIR;
 
     // ---- SpectralGrid ----
     // Raw constructors; the pyngam.SpectralGrid factories (constant_resolution, covering, ...)

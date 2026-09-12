@@ -49,6 +49,20 @@ class Chemistry{
     // before every outer-iteration chemistry evaluation. Only modules that need it override this.
     virtual void setKzz(const std::vector<double>&) {}
 
+    // lagged = true while the temperature corrector probes TRIAL profiles: a module whose result
+    // depends on T through anything the corrector's Jacobian does not model (the quench module's
+    // quench points, for instance) must then reapply its last committed state instead of
+    // re-deriving it from the trial profile. Modules that are cheap and smooth ignore this.
+    virtual void setLagged(const bool) {}
+
+    // A disabled module is skipped by the owning object (its composition passes through). Used for
+    // a chemistry continuation: converge with equilibrium first, then switch the quench module on
+    // and re-solve warm -- from a cold analytic start the quench composition can be so far from the
+    // converged one (every family quenched at the grid bottom, a CH4/NH3 column up to the top) that
+    // the damped Newton's linearisation of the deep level is useless (measured: warm Jupiter,
+    // Guillot start, +1700 K at the bottom in one call, then a permanent crawl).
+    bool enabled = true;
+
     // the module's own runtime parameters (e.g. metallicity and C/O for the equilibrium module,
     // the mixing ratios for the isoprofile module), set from its module spec at construction;
     // the objects pass these to calcChemicalComposition

@@ -152,6 +152,8 @@ struct TemperatureCorrectionSetup {
   // Delta tau >> 1 (the self-luminous radiative band) the residual is itself Nyquist-degenerate and a
   // one-level placement error locks in a large-amplitude checkerboard -- so those objects pass 0.
   int mask_band = 2;
+  // the profile is a converged (or near-converged) state: skip the easy-start homotopy
+  bool warm_start = false;
 };
 
 
@@ -196,11 +198,13 @@ inline std::unique_ptr<TemperatureCorrection> selectTemperatureCorrection(
   {
     case ratio_ul :
       return std::make_unique<ClimaRCECorrection>(
-        setup.target_flux, setup.convection, setup.mask_band, /*use_ratio=*/true);
+        setup.target_flux, setup.convection, setup.mask_band, /*use_ratio=*/true, setup.warm_start,
+        setup.flux_scale);
 
     case flux_divergence :
       return std::make_unique<ClimaRCECorrection>(
-        setup.target_flux, setup.convection, setup.mask_band, /*use_ratio=*/false);
+        setup.target_flux, setup.convection, setup.mask_band, /*use_ratio=*/false, setup.warm_start,
+        setup.flux_scale);
 
     case ptc :
       return std::make_unique<LinearisedTemperatureCorrection>(

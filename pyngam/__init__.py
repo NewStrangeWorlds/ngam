@@ -24,7 +24,8 @@ __all__ = [
     "SpectralGrid", "BrownDwarf", "GasPlanet", "TerrestrialPlanet",
     "species_symbols", "Atmosphere", "RadiativeTransferOutput", "model_config_doc",
     "save_model", "load_model_data", "load_init_arrays", "load_temperature", "load_output_config",
-    "load_config", "build_model", "run", "spec_to_dict",
+    "load_config", "build_model", "run", "spec_to_dict", "mixing_ratios",
+    "KineticsCoupling", "interpolate_log", "neovulcan_dir", "load_vulcan",
 ]
 
 
@@ -177,6 +178,57 @@ _COMPONENT_DEFAULTS = {
     "solver": {"type": "ratio_ul"},
 }
 
+def mixing_ratios(model, species=None):
+    """Volume mixing ratios of the model's current composition.
+
+    Returns ``(symbols, table)`` with ``table[level][k]`` for ``symbols[k]`` on the model's
+    pressure grid (index 0 = bottom). ``species``: symbols to return (default: every species
+    ngam knows). The table has the layout :meth:`set_composition` expects.
+    """
+    import numpy as np
+    symbols = list(species_symbols())
+    nd = np.asarray(model.atmosphere.number_densities)[:, :len(symbols)]
+    total = nd[:, symbols.index("Total")]
+    wanted = [s for s in (species or symbols) if s != "Total"]
+    cols = [symbols.index(s) for s in wanted]
+    return wanted, (nd[:, cols] / total[:, None]).tolist()
+
+
+def neovulcan_dir():
+    """Directory of the neoVULCAN checkout fetched by the build (CMakeLists.txt pins the commit;
+    override with ``-DFETCHCONTENT_SOURCE_DIR_NEOVULCAN=<local checkout>``). Raises if the build
+    was configured without it."""
+    path = getattr(_pyngam, "neovulcan_dir", "")
+    if not path:
+        raise RuntimeError("this build was configured without neoVULCAN (NGAM_FETCH_NEOVULCAN=OFF)")
+    return path
+
+
+def load_vulcan(config_path, base_dir=None, cfg_overrides=None, regenerate_chemistry=True):
+    """Create and initialise a neoVULCAN ``VulcanChemistry`` instance for the kinetics coupling.
+
+    ``config_path``: neoVULCAN TOML configuration (relative paths inside it are resolved against
+    ``base_dir``, which defaults to the checkout fetched by the build). The initialisation runs
+    from ``base_dir`` because neoVULCAN reads its thermodynamic data relative to it; pass
+    ``base_dir`` as ``workdir`` to :class:`KineticsCoupling` for the same reason.
+    Returns ``(chem, base_dir)``.
+    """
+    import os
+    import sys
+    base_dir = os.path.abspath(base_dir or neovulcan_dir())
+    if base_dir not in sys.path:
+        sys.path.insert(0, base_dir)
+    from vulcan_api import VulcanChemistry   # noqa: E402
+    chem = VulcanChemistry(base_dir, config_path=os.path.abspath(config_path), cfg_overrides=cfg_overrides)
+    cwd = os.getcwd()
+    os.chdir(base_dir)
+    try:
+        chem.initialize(regenerate_chemistry=regenerate_chemistry)
+    finally:
+        os.chdir(cwd)
+    return chem, base_dir
+
+
 def _wrap_model(kind, base):
     """Subclass a compiled model class so that it records its configuration."""
 
@@ -225,3 +277,6 @@ MODEL_CLASSES = {
     "GasPlanet": GasPlanet, "gas_planet": GasPlanet,
     "TerrestrialPlanet": TerrestrialPlanet, "terrestrial_planet": TerrestrialPlanet,
 }
+
+
+from .coupling import KineticsCoupling, interpolate_log  # noqa: E402  (needs mixing_ratios above)
