@@ -4,7 +4,7 @@ import os
 import sys
 
 import pyngam
-from pyngam import save_model, mixing_ratios, KineticsCoupling
+from pyngam import save_model, mixing_ratios, KineticsCoupling, load_vulcan
 
 
 # --- Model configuration ---
